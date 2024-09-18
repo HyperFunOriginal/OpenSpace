@@ -7,8 +7,8 @@ struct particle_kinematics
 	float mass_Tg;
 	float radius_km;
 	float3 velocity_kms;
-	float3 acceleration_kms;
-	__device__ __host__ particle_kinematics() : velocity_kms(make_float3(0.f)), acceleration_kms(make_float3(0.f)), mass_Tg(1E-40f), radius_km(0.f) {}
+	float3 acceleration_ms2;
+	__device__ __host__ particle_kinematics() : velocity_kms(make_float3(0.f)), acceleration_ms2(make_float3(0.f)), mass_Tg(1E-40f), radius_km(0.f) {}
 };
 struct grid_cell_ensemble
 {
@@ -28,7 +28,7 @@ __device__ __host__ float grav_force_diffuse_unfactored(float separation, float 
 		return -1.f / (separation * separation * separation);
 	return 1.1283791671f * expf(-separation * separation / (standard_deviation * standard_deviation)) / (separation * separation * standard_deviation) - erf_lossy(separation / standard_deviation) / (separation * separation * separation);
 }
-__device__ __host__ constexpr uint start_index(uint depth)
+__device__ __host__ constexpr uint __start_index(uint depth)
 {
 	return (mask_morton_x & ((~0u) >> (32u - depth * 3u))) - (mask_morton_x & ((~0u) >> (32u - minimum_depth * 3u)));
 }
@@ -57,7 +57,7 @@ __global__ void __average_ensemble(const particle_kinematics* kinematics, const 
 	this_ensemble.deviatoric_pos_km /= this_ensemble.total_mass_Tg;
 	variances = (variances / this_ensemble.total_mass_Tg) - this_ensemble.deviatoric_pos_km * this_ensemble.deviatoric_pos_km;
 	this_ensemble.standard_radius_km = sqrtf(variances.x + variances.y + variances.z);
-	grid_cells[idx + start_index(grid_dimension_pow)] = this_ensemble;
+	grid_cells[idx + __start_index(grid_dimension_pow)] = this_ensemble;
 }
 __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint target_depth)
 {
@@ -70,7 +70,7 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 
 	for (uint i = idx * 8; i < (idx + 1) * 8; i++)
 	{
-		grid_cell_ensemble target = grid_cells[i + start_index(target_depth + 1)];
+		grid_cell_ensemble target = grid_cells[i + __start_index(target_depth + 1)];
 		float3 rel_pos = target.deviatoric_pos_km + __cell_pos_from_index(i, target_depth + 1) - this_cell_pos;
 
 		this_ensemble.total_mass_Tg += target.total_mass_Tg;
@@ -81,10 +81,10 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 	this_ensemble.deviatoric_pos_km /= this_ensemble.total_mass_Tg;
 	variances = (variances / this_ensemble.total_mass_Tg) - this_ensemble.deviatoric_pos_km * this_ensemble.deviatoric_pos_km;
 	this_ensemble.standard_radius_km = sqrtf(variances.x + variances.y + variances.z);
-	grid_cells[idx + start_index(target_depth)] = this_ensemble;
+	grid_cells[idx + __start_index(target_depth)] = this_ensemble;
 }
 
-__device__ constexpr bool compute_gravity_empty_cell = true;
+__device__ constexpr bool compute_gravity_empty_cell = false;
 __device__ constexpr uint block_size_barnes_hut = 64u >> (grid_dimension_pow - minimum_depth > 4);
 __device__ constexpr float barnes_hut_criterion = 0.5f;
 __device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
@@ -119,7 +119,7 @@ __device__ __host__ octree_indexer compute_gravity_check(const float3 this_pos, 
 	if (!s.valid()) { return s; }
 
 	const uint other_m = s.morton_index(), other_d = s.depth();
-	const grid_cell_ensemble other_c = octree[other_m + start_index(other_d)];
+	const grid_cell_ensemble other_c = octree[other_m + __start_index(other_d)];
 	float3 separation = this_pos - (other_c.deviatoric_pos_km + __cell_pos_from_index(other_m, other_d));
 	if ((other_c.standard_radius_km * other_c.standard_radius_km / dot(separation, separation) > barnes_hut_criterion * barnes_hut_criterion) && (other_d < grid_dimension_pow))
 		return s;
@@ -136,7 +136,7 @@ __global__ void __compute_barnes_hut(grid_cell_ensemble* octree, const uint* cel
 	if (compute_gravity_empty_cell || __count_particles(cell_bounds, idx, grid_dimension_pow) > 0) {
 		__shared__ octree_indexer stacks[min_stack_size_required * block_size_barnes_hut]; // min_stack_size_required * block_size_barnes_hut = 1920u
 		octree_indexer* this_stack = stacks + threadIdx.x * min_stack_size_required;
-		float3 this_position_km = octree[idx + start_index(grid_dimension_pow)].deviatoric_pos_km + __cell_pos_from_index(idx, grid_dimension_pow);
+		float3 this_position_km = octree[idx + __start_index(grid_dimension_pow)].deviatoric_pos_km + __cell_pos_from_index(idx, grid_dimension_pow);
 		for (uint i = 0; i < 1u << (minimum_depth * 3u); i++)
 		{
 			this_stack[0].data = 0u;
@@ -151,56 +151,74 @@ __global__ void __compute_barnes_hut(grid_cell_ensemble* octree, const uint* cel
 			}
 		}
 	}
-	octree[idx + start_index(grid_dimension_pow)].average_acceleration_ms2 = acceleration_ms2;
+	octree[idx + __start_index(grid_dimension_pow)].average_acceleration_ms2 = acceleration_ms2;
 }
-__global__ void __init_sphere(particle* particles, particle_kinematics* kinematics, const uint particle_count, const uint offset, 
-	const uint layers, const float3 center, const float3 velocity, const float particle_mass, const float particle_radius)
+__global__ void __init_kinematics(const particle* particles, particle_kinematics* kinematics, const uint particle_count, const uint offset, const float3 velocity,
+								const float3 center, const float3 angular_velocity, const float particle_mass, const float particle_radius)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_count) { return; }
 
-	uint layer = clamp(cbrtf(idx / (float)particle_count) * layers, .0001f, layers - .0001f);
-	
-	float lower_bounds = layer / ((float)layers);
-	lower_bounds *= lower_bounds * lower_bounds * particle_count;
-	float upper_bounds = clamp((layer + 1.f) / ((float)layers), 0.f, 1.f);
-	upper_bounds *= upper_bounds * upper_bounds * particle_count;
-
-	float z = 1.f - ((idx - lower_bounds) * 2.f / (upper_bounds - lower_bounds));
-	float t = 3.88322207745f * (idx - lower_bounds), r = sqrtf(1.f - z * z);
-	particle to_set = particle();
-
-	to_set.set_existence(true);
-	to_set.set_true_pos(center + make_float3(cosf(t) * r, sinf(t) * r, z) * (layer * .7f + .5f) * particle_radius);
-	particles[idx + offset] = to_set;
+	float3 position_from_center = particles[idx + offset].true_pos() - center;
+	float3 tangential_vel = make_float3(position_from_center.z * angular_velocity.y - position_from_center.y * angular_velocity.z,
+										position_from_center.z * angular_velocity.x - position_from_center.x * angular_velocity.z,
+										position_from_center.y * angular_velocity.x - position_from_center.x * angular_velocity.y);
 
 	particle_kinematics kinematics_to_set = particle_kinematics();
 	kinematics_to_set.mass_Tg = particle_mass;
 	kinematics_to_set.radius_km = particle_radius;
-	kinematics_to_set.velocity_kms = velocity;
+	kinematics_to_set.velocity_kms = velocity + tangential_vel;
 	kinematics[idx + offset] = kinematics_to_set;
+}
+__global__ void __apply_gravitation(const grid_cell_ensemble* octree, const uint* cell_bounds, const particle* particles, particle_kinematics* kinematics, const uint particle_capacity)
+{
+	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
+	if (idx >= particle_capacity) { return; }
+
+	if (!particles[idx].exists()) { return; }
+	float3 this_pos = particles[idx].true_pos();
+	uint morton_index = particles[idx].morton_index();
+	float3 acceleration_ms2 = octree[morton_index + __start_index(grid_dimension_pow)].average_acceleration_ms2;
+
+	for (uint i = __read_start_idx(cell_bounds, morton_index), j = __read_start_idx(cell_bounds, morton_index + 1u); i < j; i++)
+	{
+		if (i == idx) { continue; }
+		float3 separation = this_pos - particles[i].true_pos();
+		acceleration_ms2 += separation * (kinematics[i].mass_Tg * G_in_Tg_km_units * grav_force_diffuse_unfactored(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f));
+	}
+
+	kinematics[idx].acceleration_ms2 = acceleration_ms2;
+}
+__global__ void __apply_kinematics(particle* particles, particle_kinematics* kinematics, const float timestep_s, const uint particle_capacity)
+{
+	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
+	if (idx >= particle_capacity) { return; }
+
+	if (!particles[idx].exists()) { return; }
+	float3 new_V = kinematics[idx].velocity_kms + kinematics[idx].acceleration_ms2 * timestep_s * .001f;
+	particles[idx].set_true_pos(particles[idx].true_pos() + new_V * timestep_s);
+	kinematics[idx].velocity_kms = new_V;
 }
 
 struct gravitational_simulation : spatial_grid
 {
 	particle_data_buffer<particle_kinematics> kinematic_data;
 	smart_gpu_cpu_buffer<grid_cell_ensemble> octree;
+	
+	void set_massive_sphere(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
+	{
+		uint threads = min(particle_count, 512);
+		uint blocks = ceilf(particle_count / (float)threads);
 
+		set_point_sphere(particle_count, write_offset, total_radius_km, center_km);
+		__init_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, velocity_kms,
+			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km / (ceilf(cbrtf(particle_count) * .55f) * .85f - 0.2f)); cuda_sync();
+	}
 	virtual void counting_sort_transfers(const smart_gpu_buffer<uint>& cell_bounds, const smart_gpu_buffer<particle>& targets) override
 	{
 		counting_sort_data_transfer(cell_bounds, targets, kinematic_data);
 	}
-	virtual void set_sphere(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f))
-	{
-		uint threads = min(particle_count, 512);
-		uint blocks = ceilf(particle_count / (float)threads);
-		uint layers = ceilf(cbrtf(particle_count) * .55f);
-
-		__init_sphere<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, layers,
-			center_km, velocity_kms, total_mass_Tg / particle_count, total_radius_km / (layers * .9f - 0.2f));
-		cuda_sync();
-	}
-	gravitational_simulation(size_t allocation_particles) : spatial_grid(allocation_particles), octree(start_index(grid_dimension_pow + 1)), kinematic_data(allocation_particles) { }
+	gravitational_simulation(size_t allocation_particles) : spatial_grid(allocation_particles), octree(__start_index(grid_dimension_pow + 1)), kinematic_data(allocation_particles) { }
 	void generate_gravitational_data()
 	{
 		__average_ensemble<<<((uint)ceilf(cell_bounds.dedicated_len / 512.f)), 512u>>>(kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, octree.gpu_buffer_ptr);
@@ -210,6 +228,20 @@ struct gravitational_simulation : spatial_grid
 			__mipmap_1_layer<<<((uint)ceilf((1u << (3u * i)) / (float)threads.x)), threads>>>(octree.gpu_buffer_ptr, i);
 		}
 		__compute_barnes_hut<<<((uint)ceilf(grid_side_length * grid_side_length * grid_side_length / (float)block_size_barnes_hut)), block_size_barnes_hut>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
+	}
+	void apply_gravitation()
+	{
+		uint threads = particle_capacity < 512u ? particle_capacity : 512u;
+		uint blocks = ceilf(particle_capacity / (float)threads);
+
+		__apply_gravitation<<<blocks, threads>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_capacity);
+	}
+	void apply_kinematics(float timestep_s = 1.f)
+	{
+		uint threads = particle_capacity < 512u ? particle_capacity : 512u;
+		uint blocks = ceilf(particle_capacity / (float)threads);
+
+		__apply_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, timestep_s, particle_capacity);
 	}
 };
 

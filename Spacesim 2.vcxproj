@@ -13,6 +13,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{98F771AF-0252-4FC4-BDC3-8E9288DD0959}</ProjectGuid>
     <RootNamespace>Spacesim_2</RootNamespace>
+    <ProjectName>OpenSpace</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -90,6 +91,7 @@
     <ClInclude Include="io_img_helper.h" />
     <ClInclude Include="lodepng.h" />
     <ClInclude Include="printstring_helper.h" />
+    <ClInclude Include="raymarch.h" />
     <ClInclude Include="spatial_grid.h" />
   </ItemGroup>
   <ItemGroup>

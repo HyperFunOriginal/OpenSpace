@@ -138,6 +138,29 @@ __global__ void __copy_spatial_counting_sort(const uint* cell_pos, const particl
 	new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = part;
 }
 
+__global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float padding)
+{
+	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
+	if (idx >= particle_count) { return; }
+
+	uint layer = clamp(cbrtf(idx / (float)particle_count) * layers, .0001f, layers - .0001f);
+
+	float lower_bounds = layer / ((float)layers);
+	lower_bounds *= lower_bounds * lower_bounds * particle_count;
+	float upper_bounds = clamp((layer + 1.f) / ((float)layers), 0.f, 1.f);
+	upper_bounds *= upper_bounds * upper_bounds * particle_count;
+
+	float z = 1.f - ((idx - lower_bounds) * 2.f / (upper_bounds - lower_bounds));
+	float t = 3.88322207745f * (idx - lower_bounds), r = sqrtf(1.f - z * z);
+	float lc = cosf(3.88322207745f * layer), ls = sinf(3.88322207745f * layer), ts = sinf(t);
+	particle to_set = particle();
+
+	to_set.set_existence(true);
+	to_set.set_true_pos(center + make_float3(cosf(t) * r, (ts * r) * lc + z * ls, z * lc - (ts * r) * ls) * (layer * .85f + padding) * particle_spacing);
+	particles[idx + offset] = to_set;
+}
+
+
 template <class T>
 struct particle_data_buffer
 {
@@ -156,6 +179,14 @@ struct spatial_grid
 	particle_data_buffer<particle> particles;
 	smart_gpu_buffer<uint> cell_bounds;
 public:
+	void set_point_sphere(const uint particle_count, const uint write_offset, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f))
+	{
+		uint threads = min(particle_count, 512);
+		uint blocks = ceilf(particle_count / (float)threads);
+		uint layers = ceilf(cbrtf(particle_count) * .55f);
+
+		__init_sphere<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, layers, center_km, total_radius_km / (layers * .85f - 0.2f), (particle_count > 1u) * .65f); cuda_sync();
+	}
 	/// <summary>
 	/// Copy data associated with particles in sort. Override for required data.
 	/// </summary>
