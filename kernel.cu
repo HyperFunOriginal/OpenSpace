@@ -1,5 +1,4 @@
 ﻿#include "printstring_helper.h"
-#include "io_img_helper.h"
 #include "gravitation.h"
 #include "raymarch.h"
 

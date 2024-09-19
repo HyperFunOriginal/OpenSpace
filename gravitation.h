@@ -17,6 +17,8 @@ struct grid_cell_ensemble
 	float3 deviatoric_pos_km;
 	float3 average_acceleration_ms2;
 	__device__ __host__ grid_cell_ensemble() : deviatoric_pos_km(make_float3(0.f)), total_mass_Tg(1E-40f), standard_radius_km(0.f) {}
+
+	__device__ __host__ float average_density() const { return total_mass_Tg / (4.18879020479f * standard_radius_km * standard_radius_km * standard_radius_km); }
 };
 
 __device__ __host__ float grav_force_diffuse_unfactored(float separation, float standard_deviation)
@@ -36,7 +38,7 @@ __device__ __host__ constexpr uint __start_index(uint depth)
 __global__ void __average_ensemble(const particle_kinematics* kinematics, const particle* positions, const uint* cell_pos, grid_cell_ensemble* grid_cells)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
-	if (idx >= grid_side_length * grid_side_length * grid_side_length) { return; }
+	if (idx >= grid_cell_count) { return; }
 	const uint start_pos = __read_start_idx(cell_pos, idx), end_pos = __read_start_idx(cell_pos, idx + 1);
 	const float3 this_cell_pos = __cell_pos_from_index(idx, grid_dimension_pow);
 
@@ -84,7 +86,7 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 	grid_cells[idx + __start_index(target_depth)] = this_ensemble;
 }
 
-__device__ constexpr bool compute_gravity_empty_cell = false;
+__device__ constexpr bool compute_gravity_empty_cell = true;
 __device__ constexpr uint block_size_barnes_hut = 64u >> (grid_dimension_pow - minimum_depth > 4);
 __device__ constexpr float barnes_hut_criterion = 0.5f;
 __device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
@@ -131,7 +133,7 @@ __device__ __host__ octree_indexer compute_gravity_check(const float3 this_pos, 
 __global__ void __compute_barnes_hut(grid_cell_ensemble* octree, const uint* cell_bounds)
 {
 	uint idx = threadIdx.x + block_size_barnes_hut * blockIdx.x; // block_size_barnes_hut = 64u
-	if (idx >= grid_side_length * grid_side_length * grid_side_length) { return; }
+	if (idx >= grid_cell_count) { return; }
 	float3 acceleration_ms2 = make_float3(0.f);
 	if (compute_gravity_empty_cell || __count_particles(cell_bounds, idx, grid_dimension_pow) > 0) {
 		__shared__ octree_indexer stacks[min_stack_size_required * block_size_barnes_hut]; // min_stack_size_required * block_size_barnes_hut = 1920u
@@ -203,7 +205,7 @@ __global__ void __apply_kinematics(particle* particles, particle_kinematics* kin
 struct gravitational_simulation : spatial_grid
 {
 	particle_data_buffer<particle_kinematics> kinematic_data;
-	smart_gpu_cpu_buffer<grid_cell_ensemble> octree;
+	smart_gpu_buffer<grid_cell_ensemble> octree;
 	
 	void set_massive_sphere(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
@@ -212,7 +214,7 @@ struct gravitational_simulation : spatial_grid
 
 		set_point_sphere(particle_count, write_offset, total_radius_km, center_km);
 		__init_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, velocity_kms,
-			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km / (ceilf(cbrtf(particle_count) * .55f) * .85f - 0.2f)); cuda_sync();
+			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km / cbrtf(particle_count)); cuda_sync();
 	}
 	virtual void counting_sort_transfers(const smart_gpu_buffer<uint>& cell_bounds, const smart_gpu_buffer<particle>& targets) override
 	{
@@ -227,7 +229,7 @@ struct gravitational_simulation : spatial_grid
 			dim3 threads(min(512u, 1u << (3u * i)));
 			__mipmap_1_layer<<<((uint)ceilf((1u << (3u * i)) / (float)threads.x)), threads>>>(octree.gpu_buffer_ptr, i);
 		}
-		__compute_barnes_hut<<<((uint)ceilf(grid_side_length * grid_side_length * grid_side_length / (float)block_size_barnes_hut)), block_size_barnes_hut>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
+		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / (float)block_size_barnes_hut)), block_size_barnes_hut>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
 	}
 	void apply_gravitation()
 	{

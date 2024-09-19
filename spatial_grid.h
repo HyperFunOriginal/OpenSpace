@@ -6,6 +6,7 @@ __device__ constexpr uint minimum_depth = 1u;
 __device__ constexpr uint grid_dimension_pow = 6u;
 __device__ constexpr float domain_size_km = 100000.f;
 __device__ constexpr uint grid_side_length = 1u << grid_dimension_pow;
+__device__ constexpr uint grid_cell_count = 1u << (3u * grid_dimension_pow);
 __device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length;
 
 struct particle
@@ -183,9 +184,9 @@ public:
 	{
 		uint threads = min(particle_count, 512);
 		uint blocks = ceilf(particle_count / (float)threads);
-		uint layers = ceilf(cbrtf(particle_count) * .55f);
+		uint layers = ceilf(cbrtf(particle_count) * .85f);
 
-		__init_sphere<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, layers, center_km, total_radius_km / (layers * .85f - 0.2f), (particle_count > 1u) * .65f); cuda_sync();
+		__init_sphere<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, layers, center_km, total_radius_km / (layers * .85f - 0.2f), (particle_count > 1u) * .15f); cuda_sync();
 	}
 	/// <summary>
 	/// Copy data associated with particles in sort. Override for required data.

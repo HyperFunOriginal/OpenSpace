@@ -88,7 +88,6 @@
     <ClInclude Include="cum_sum.h" />
     <ClInclude Include="gravitation.h" />
     <ClInclude Include="helper_math.h" />
-    <ClInclude Include="io_img_helper.h" />
     <ClInclude Include="lodepng.h" />
     <ClInclude Include="printstring_helper.h" />
     <ClInclude Include="raymarch.h" />
