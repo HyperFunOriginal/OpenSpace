@@ -18,7 +18,7 @@ struct grid_cell_ensemble
 	float3 average_acceleration_ms2;
 	__device__ __host__ grid_cell_ensemble() : deviatoric_pos_km(make_float3(0.f)), total_mass_Tg(1E-40f), standard_radius_km(0.f) {}
 
-	__device__ __host__ float average_density() const { return total_mass_Tg / (4.18879020479f * standard_radius_km * standard_radius_km * standard_radius_km); }
+	__device__ __host__ float average_density_kgm3() const { return total_mass_Tg / fmaxf(4.18879020479f * standard_radius_km * standard_radius_km * standard_radius_km, 1E-5f); }
 };
 
 __device__ __host__ float grav_force_diffuse_unfactored(float separation, float standard_deviation)
@@ -86,9 +86,9 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 	grid_cells[idx + __start_index(target_depth)] = this_ensemble;
 }
 
-__device__ constexpr bool compute_gravity_empty_cell = true;
+__device__ constexpr bool compute_gravity_empty_cell = false;
 __device__ constexpr uint block_size_barnes_hut = 64u >> (grid_dimension_pow - minimum_depth > 4);
-__device__ constexpr float barnes_hut_criterion = 0.5f;
+__device__ constexpr float barnes_hut_criterion = 0.35f;
 __device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
 __device__ constexpr uint min_stack_size_required = 2u + 7u * (grid_dimension_pow - minimum_depth);
 
@@ -163,7 +163,7 @@ __global__ void __init_kinematics(const particle* particles, particle_kinematics
 
 	float3 position_from_center = particles[idx + offset].true_pos() - center;
 	float3 tangential_vel = make_float3(position_from_center.z * angular_velocity.y - position_from_center.y * angular_velocity.z,
-										position_from_center.z * angular_velocity.x - position_from_center.x * angular_velocity.z,
+										-position_from_center.z * angular_velocity.x + position_from_center.x * angular_velocity.z,
 										position_from_center.y * angular_velocity.x - position_from_center.x * angular_velocity.y);
 
 	particle_kinematics kinematics_to_set = particle_kinematics();
@@ -206,7 +206,16 @@ struct gravitational_simulation : spatial_grid
 {
 	particle_data_buffer<particle_kinematics> kinematic_data;
 	smart_gpu_buffer<grid_cell_ensemble> octree;
-	
+
+	void set_massive_disk(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
+	{
+		uint threads = min(particle_count, 512);
+		uint blocks = ceilf(particle_count / (float)threads);
+
+		set_point_disk(particle_count, write_offset, total_radius_km, center_km);
+		__init_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, velocity_kms,
+			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km / sqrtf(particle_count)); cuda_sync();
+	}
 	void set_massive_sphere(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
 		uint threads = min(particle_count, 512);

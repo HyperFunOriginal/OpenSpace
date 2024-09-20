@@ -2,6 +2,7 @@
 #define SPATIAL_GRID_H
 #include "cum_sum.h"
 
+__device__ constexpr bool wrap_around = false;
 __device__ constexpr uint minimum_depth = 1u;
 __device__ constexpr uint grid_dimension_pow = 6u;
 __device__ constexpr float domain_size_km = 100000.f;
@@ -35,9 +36,14 @@ struct particle
 	{
 		return make_float3(position) * (domain_size_km / 4294967295.f);
 	}
-	__device__ __host__ void set_true_pos(const float3 pos)
+	__device__ __host__ void set_true_pos(float3 pos)
 	{
-		position = make_uint3(clamp(pos / domain_size_km, 0.f, 1.f) * 4294967040.f);
+		pos /= domain_size_km;
+		if (wrap_around)
+			pos -= floorf(pos);
+		else if (global_min(pos) < 0.f || global_max(pos) > 1.f)
+			cell_and_existence = 0u;
+		position = make_uint3(pos * 4294967040.f);
 	}
 };
 static_assert(sizeof(particle) == 16, "Wrong size!");
@@ -127,7 +133,8 @@ __global__ void __copy_spatial_counting_sort_data(const uint* cell_pos, const pa
 	if (idx >= number_particles) { return; }
 
 	particle part = target[idx];
-	new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = old_buffer[idx];
+	if (part.exists())
+		new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = old_buffer[idx];
 }
 
 __global__ void __copy_spatial_counting_sort(const uint* cell_pos, const particle* old_buffer, particle* new_buffer, uint number_particles)
@@ -136,7 +143,8 @@ __global__ void __copy_spatial_counting_sort(const uint* cell_pos, const particl
 	if (idx >= number_particles) { return; }
 
 	particle part = old_buffer[idx];
-	new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = part;
+	if (part.exists())
+		new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = part;
 }
 
 __global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float padding)
@@ -161,6 +169,21 @@ __global__ void __init_sphere(particle* particles, const uint particle_count, co
 	particles[idx + offset] = to_set;
 }
 
+__global__ void __init_disk(particle* particles, const uint particle_count, const uint offset, const float3 center, const float particle_spacing)
+{
+	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
+	if (idx >= particle_count) { return; }
+
+	float r = sqrtf(idx);
+	float t = 3.88322207745f * idx;
+	particle to_set = particle();
+
+	to_set.set_existence(true);
+	to_set.set_true_pos(center + make_float3(cosf(t) * r, sinf(t) * r, (idx % 2u) * .01f) * particle_spacing);
+	particles[idx + offset] = to_set;
+}
+
+
 
 template <class T>
 struct particle_data_buffer
@@ -180,6 +203,13 @@ struct spatial_grid
 	particle_data_buffer<particle> particles;
 	smart_gpu_buffer<uint> cell_bounds;
 public:
+	void set_point_disk(const uint particle_count, const uint write_offset, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f))
+	{
+		uint threads = min(particle_count, 512);
+		uint blocks = ceilf(particle_count / (float)threads);
+
+		__init_disk<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, center_km, total_radius_km / sqrtf(particle_count)); cuda_sync();
+	}
 	void set_point_sphere(const uint particle_count, const uint write_offset, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f))
 	{
 		uint threads = min(particle_count, 512);

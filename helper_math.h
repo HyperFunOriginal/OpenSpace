@@ -44,6 +44,8 @@
 
 typedef unsigned int uint;
 typedef unsigned short ushort;
+static_assert(sizeof(uint) == 4, "uint must be 32 bits.");
+static_assert(sizeof(ushort) == 2, "ushort must be 16 bits.");
 
 #ifndef EXIT_WAIVED
 #define EXIT_WAIVED 2

@@ -1,9 +1,9 @@
 #ifndef RAYMARCH_H
 #define RAYMARCH_H
-#include <stdio.h>
 #include <iostream>
 #include <fstream>
-#include "spatial_grid.h"
+#include "lodepng.h"
+#include "gravitation.h"
 
 template <class T>
 void write_to_file(const smart_cpu_buffer<T>& arr, const char* filepath)
@@ -69,6 +69,32 @@ inline __host__ __device__ float4 ___hue_svalue(float2 HsV)
         HsV = make_float2(0.f);
     float3 col = clamp(make_float3(cosf(HsV.x) + .5f, cosf(HsV.x - 2.09439510239f) + .5f, cosf(HsV.x + 2.09439510239f) + .5f), 0.f, 1.f);
     return make_float4(lerp(col, make_float3(HsV.y > 1.f), (HsV.y > 1.f) ? (1.f - 1.f / HsV.y) : 1.f - cbrtf(HsV.y)), 1.f);
+}
+
+// Temporary debug view
+__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
+{
+    const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
+    if (idx.x >= width || idx.y >= height)
+        return;
+
+    uint coords = idx.y * width + idx.x;
+    uint morton_index = __morton_index(make_float3(idx.x * domain_size_km / (float)width, idx.y * domain_size_km / (float)height, 0.f));
+    float density = 0.f;
+
+    for (uint i = morton_index; i < grid_cell_count; i = add_morton_indices(i, 4u))
+        density += cells[__start_index(grid_dimension_pow) + i].total_mass_Tg;
+    density = sqrtf(density * 4E-14f);
+
+    pixels[coords] = ___rgba(make_float4(density, density, density, 1.f));
+}
+
+void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_simulation& simulation, const int width, const int height, const char* filename)
+{
+    const dim3 threads(min(width, 16), min(height, 16));
+    const dim3 blocks((uint)ceilf(width / (float)threads.x), (uint)ceilf(height / (float)threads.y));
+    ___write_image_octree<<<blocks, threads>>>(temp.gpu_buffer_ptr, simulation.octree.gpu_buffer_ptr, width, height);
+    temp.copy_to_cpu(); cuda_sync(); lodepng_encode32_file(filename, reinterpret_cast<const unsigned char*>(temp.cpu_buffer_ptr), width, height);
 }
 
 
