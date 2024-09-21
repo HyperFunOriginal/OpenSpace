@@ -2,10 +2,10 @@
 #define SPATIAL_GRID_H
 #include "cum_sum.h"
 
-__device__ constexpr bool wrap_around = false;
+__device__ constexpr bool wrap_around = true;
 __device__ constexpr uint minimum_depth = 1u;
 __device__ constexpr uint grid_dimension_pow = 6u;
-__device__ constexpr float domain_size_km = 100000.f;
+__device__ constexpr float domain_size_km = 30000.f;
 __device__ constexpr uint grid_side_length = 1u << grid_dimension_pow;
 __device__ constexpr uint grid_cell_count = 1u << (3u * grid_dimension_pow);
 __device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length;
@@ -169,20 +169,22 @@ __global__ void __init_sphere(particle* particles, const uint particle_count, co
 	particles[idx + offset] = to_set;
 }
 
-__global__ void __init_disk(particle* particles, const uint particle_count, const uint offset, const float3 center, const float particle_spacing)
+__global__ void __init_cuboid(particle* particles, const uint particle_count, const uint offset, const uint3 layers, const float3 center, const float particle_spacing)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_count) { return; }
 
-	float r = sqrtf(idx);
-	float t = 3.88322207745f * idx;
 	particle to_set = particle();
+	uint3 positions_in_shape = make_uint3(idx % layers.x, (idx / layers.x) % layers.y, idx / (layers.x * layers.y));
+	float3 positions = make_float3(positions_in_shape);
+	positions.x += ((positions_in_shape.y % 2u) + (positions_in_shape.z % 2u)) * .5f - .5f;
+	positions.y = (positions.y + (positions_in_shape.z % 2u) * .5f - .5f) * 0.86602540378f; positions.z *= 0.75f;
+	
 
 	to_set.set_existence(true);
-	to_set.set_true_pos(center + make_float3(cosf(t) * r, sinf(t) * r, (idx % 2u) * .01f) * particle_spacing);
+	to_set.set_true_pos(center + (positions - make_float3(layers - 1u) * make_float3(.5f, 0.43301270189f, .375f)) * particle_spacing);
 	particles[idx + offset] = to_set;
 }
-
 
 
 template <class T>
@@ -203,12 +205,15 @@ struct spatial_grid
 	particle_data_buffer<particle> particles;
 	smart_gpu_buffer<uint> cell_bounds;
 public:
-	void set_point_disk(const uint particle_count, const uint write_offset, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f))
+	void set_point_cuboid(const uint particle_count, const uint write_offset, const float3 dimensions, const float3 center_km = make_float3(domain_size_km * .5f))
 	{
 		uint threads = min(particle_count, 512);
 		uint blocks = ceilf(particle_count / (float)threads);
+		float average_spacing = cbrtf(dimensions.x * dimensions.y * dimensions.z / particle_count);
+		uint3 layers = make_uint3(roundf(dimensions * make_float3(0.86602540378f, 1.f, 1.15470053838f) / average_spacing));
+		layers.z = (uint)roundf(particle_count / ((float)layers.x * layers.y));
 
-		__init_disk<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, center_km, total_radius_km / sqrtf(particle_count)); cuda_sync();
+		__init_cuboid<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, layers, center_km, average_spacing); cuda_sync();
 	}
 	void set_point_sphere(const uint particle_count, const uint write_offset, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f))
 	{

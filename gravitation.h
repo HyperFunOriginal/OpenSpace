@@ -207,14 +207,15 @@ struct gravitational_simulation : spatial_grid
 	particle_data_buffer<particle_kinematics> kinematic_data;
 	smart_gpu_buffer<grid_cell_ensemble> octree;
 
-	void set_massive_disk(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
+	void set_massive_cuboid(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float3 dimensions, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
 		uint threads = min(particle_count, 512);
 		uint blocks = ceilf(particle_count / (float)threads);
+		float average_radius = cbrtf(dimensions.x * dimensions.y * dimensions.z / particle_count);
 
-		set_point_disk(particle_count, write_offset, total_radius_km, center_km);
+		set_point_cuboid(particle_count, write_offset, dimensions, center_km);
 		__init_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, velocity_kms,
-			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km / sqrtf(particle_count)); cuda_sync();
+			center_km, angular_vel_rads, total_mass_Tg / particle_count, average_radius); cuda_sync();
 	}
 	void set_massive_sphere(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
