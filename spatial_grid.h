@@ -2,10 +2,13 @@
 #define SPATIAL_GRID_H
 #include "cum_sum.h"
 
+// Tunable
 __device__ constexpr bool wrap_around = false;
-__device__ constexpr uint minimum_depth = 1u;
 __device__ constexpr uint grid_dimension_pow = 7u;
 __device__ constexpr float domain_size_km = 40000.f;
+__device__ constexpr uint minimum_depth = 1u; // Already optimal
+
+// Derived
 __device__ constexpr uint grid_side_length = 1u << grid_dimension_pow;
 __device__ constexpr uint grid_cell_count = 1u << (3u * grid_dimension_pow);
 __device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length;

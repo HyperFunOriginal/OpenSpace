@@ -3,6 +3,7 @@
 #include "raymarch.h"
 
 #include <chrono>
+// Implicit octree with morton indexing and a grid of sidelength 2^N, then raymarching straight through grids or collections thereof if there are no points there, i.e. cumsum over a certain patch is not increasing 
 double one_second()
 {
     std::chrono::steady_clock clock;
@@ -11,7 +12,7 @@ double one_second()
     return (double)(clock.now().time_since_epoch().count() - now);
 }
 
-// Implicit octree with morton indexing and a grid of sidelength 2^N, then raymarching straight through grids or collections thereof if there are no points there, i.e. cumsum over a certain patch is not increasing 
+// Tunable
 constexpr uint frames = 2100u;
 constexpr float major_timestep = 40.f;
 constexpr uint physics_substeps = 3u;

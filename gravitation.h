@@ -2,6 +2,15 @@
 #define GRAVITATION_H
 #include "spatial_grid.h"
 
+// Tunable
+__device__ constexpr bool compute_gravity_empty_cell = false;
+__device__ constexpr float barnes_hut_criterion = 0.35f;
+__device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
+
+// Derived
+__device__ constexpr uint block_size_barnes_hut = 64u >> (grid_dimension_pow - minimum_depth > 4); // constrained by shared memory
+__device__ constexpr uint min_stack_size_required = 2u + 7u * (grid_dimension_pow - minimum_depth);
+
 struct particle_kinematics
 {
 	float mass_Tg;
@@ -85,12 +94,6 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 	this_ensemble.standard_radius_km = sqrtf(variances.x + variances.y + variances.z);
 	grid_cells[idx + __start_index(target_depth)] = this_ensemble;
 }
-
-__device__ constexpr bool compute_gravity_empty_cell = false;
-__device__ constexpr uint block_size_barnes_hut = 64u >> (grid_dimension_pow - minimum_depth > 4);
-__device__ constexpr float barnes_hut_criterion = 0.35f;
-__device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
-__device__ constexpr uint min_stack_size_required = 2u + 7u * (grid_dimension_pow - minimum_depth);
 
 struct octree_indexer
 {
