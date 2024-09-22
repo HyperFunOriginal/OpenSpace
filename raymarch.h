@@ -84,7 +84,7 @@ __global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* ce
 
     for (uint i = morton_index; i < grid_cell_count; i = add_morton_indices(i, 4u))
         density += cells[__start_index(grid_dimension_pow) + i].total_mass_Tg;
-    density = sqrtf(density * 4E-14f);
+    density = sqrtf(density / (size_grid_cell_km * size_grid_cell_km * 1E+8f));
 
     pixels[coords] = ___rgba(make_float4(density, density, density, 1.f));
 }

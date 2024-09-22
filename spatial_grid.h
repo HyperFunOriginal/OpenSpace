@@ -2,10 +2,10 @@
 #define SPATIAL_GRID_H
 #include "cum_sum.h"
 
-__device__ constexpr bool wrap_around = true;
+__device__ constexpr bool wrap_around = false;
 __device__ constexpr uint minimum_depth = 1u;
-__device__ constexpr uint grid_dimension_pow = 6u;
-__device__ constexpr float domain_size_km = 30000.f;
+__device__ constexpr uint grid_dimension_pow = 7u;
+__device__ constexpr float domain_size_km = 40000.f;
 __device__ constexpr uint grid_side_length = 1u << grid_dimension_pow;
 __device__ constexpr uint grid_cell_count = 1u << (3u * grid_dimension_pow);
 __device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length;
@@ -41,9 +41,10 @@ struct particle
 		pos /= domain_size_km;
 		if (wrap_around)
 			pos -= floorf(pos);
-		else if (global_min(pos) < 0.f || global_max(pos) > 1.f)
+		if (fminf(global_min(pos), 1.f - global_max(pos)) < 0.f)
 			cell_and_existence = 0u;
-		position = make_uint3(pos * 4294967040.f);
+		else
+			position = make_uint3(pos * 4294967040.f);
 	}
 };
 static_assert(sizeof(particle) == 16, "Wrong size!");
@@ -87,6 +88,14 @@ __device__ constexpr uint mask_morton_x = 0b01001001001001001001001001001001u;
 __device__ constexpr uint mask_morton_y = 0b10010010010010010010010010010010u;
 __device__ constexpr uint mask_morton_z = 0b00100100100100100100100100100100u;
 
+__device__ __host__ uint sub_morton_indices(uint morton_A, uint morton_B)
+{
+	uint x = (morton_A & mask_morton_x) - (morton_B & mask_morton_x);
+	uint y = (morton_A & mask_morton_y) - (morton_B & mask_morton_y);
+	uint z = (morton_A & mask_morton_z) - (morton_B & mask_morton_z);
+	return (x & mask_morton_x) | (y & mask_morton_y) | (z & mask_morton_z);
+}
+
 __device__ __host__ uint add_morton_indices(uint morton_A, uint morton_B)
 {
 	uint x = (morton_A | (~mask_morton_x)) + (morton_B & mask_morton_x);
@@ -111,11 +120,11 @@ __device__ __host__ uint bounds(uint morton, uint depth)
 
 
 template <class T>
-__global__ void __set_empty(T* cell_counts, uint number_cells)
+__global__ void __set_empty(T* buffer, uint length)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
-	if (idx >= number_cells) { return; }
-	cell_counts[idx] = T();
+	if (idx >= length) { return; }
+	buffer[idx] = T();
 }
 
 __global__ void __locate_in_cells(uint* cell_counts, particle* particles, uint number_particles)
@@ -146,6 +155,8 @@ __global__ void __copy_spatial_counting_sort(const uint* cell_pos, const particl
 	if (part.exists())
 		new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = part;
 }
+
+
 
 __global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float padding)
 {
@@ -229,7 +240,7 @@ public:
 	/// <param name="cell_bounds">: Cell boundaries.</param>
 	/// <param name="targets">: Target particles.</param>
 	virtual void counting_sort_transfers(const smart_gpu_buffer<uint>& cell_bounds, const smart_gpu_buffer<particle>& targets) {}
-	spatial_grid(size_t allocation_particles) : particles(allocation_particles), particle_capacity(allocation_particles), cell_bounds(grid_side_length* grid_side_length* grid_side_length) {
+	spatial_grid(size_t allocation_particles) : particles(allocation_particles), particle_capacity(allocation_particles), cell_bounds(grid_cell_count) {
 		dim3 threads(particles.buffer.dedicated_len > 512u ? 512u : particles.buffer.dedicated_len);
 		dim3 blocks((uint)ceilf(particles.buffer.dedicated_len / (float)threads.x));
 
@@ -240,16 +251,16 @@ public:
 	/// </summary>
 	void sort_spatially()
 	{
-		dim3 threads(particles.buffer.dedicated_len > 512u ? 512u : particles.buffer.dedicated_len);
-		dim3 blocks((uint)ceilf(particles.buffer.dedicated_len / (float)threads.x));
+		dim3 threads(particle_capacity > 512u ? 512u : particle_capacity);
+		dim3 blocks((uint)ceilf(particle_capacity / (float)threads.x));
 
-		__set_empty<<<threads, blocks>>>(particles.temp.gpu_buffer_ptr, particles.temp.dedicated_len);
+		__set_empty<<<blocks, threads>>>(particles.temp.gpu_buffer_ptr, particle_capacity);
 		__set_empty<<<((uint)ceilf(cell_bounds.dedicated_len / 512.f)), 512u>>>(cell_bounds.gpu_buffer_ptr, cell_bounds.dedicated_len);
 	
-		__locate_in_cells<<<blocks, threads>>>(cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particles.buffer.dedicated_len);
+		__locate_in_cells<<<blocks, threads>>>(cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity);
 		apply_incl_cum_sum<uint>(cell_bounds); counting_sort_transfers(cell_bounds, particles.buffer); cuda_sync();
 
-		__copy_spatial_counting_sort<<<blocks, threads>>>(cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particles.temp.gpu_buffer_ptr, particles.buffer.dedicated_len);
+		__copy_spatial_counting_sort<<<blocks, threads>>>(cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particles.temp.gpu_buffer_ptr, particle_capacity);
 		cuda_sync(); particles.swap_pointers();
 	}
 };
@@ -259,7 +270,7 @@ void counting_sort_data_transfer(const smart_gpu_buffer<uint>& cell_bounds, cons
 {
 	dim3 threads(targets.dedicated_len > 512u ? 512u : targets.dedicated_len);
 	dim3 blocks((uint)ceilf(targets.dedicated_len / (float)threads.x));
-	__copy_spatial_counting_sort_data<T> << <blocks, threads >> > (cell_bounds.gpu_buffer_ptr, targets.gpu_buffer_ptr, buffer.buffer.gpu_buffer_ptr, buffer.temp.gpu_buffer_ptr, targets.dedicated_len);
+	__copy_spatial_counting_sort_data<T><<<blocks, threads>>>(cell_bounds.gpu_buffer_ptr, targets.gpu_buffer_ptr, buffer.buffer.gpu_buffer_ptr, buffer.temp.gpu_buffer_ptr, targets.dedicated_len);
 	buffer.swap_pointers();
 }
 

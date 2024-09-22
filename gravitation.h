@@ -191,14 +191,14 @@ __global__ void __apply_gravitation(const grid_cell_ensemble* octree, const uint
 
 	kinematics[idx].acceleration_ms2 = acceleration_ms2;
 }
-__global__ void __apply_kinematics(particle* particles, particle_kinematics* kinematics, const float timestep_s, const uint particle_capacity)
+__global__ void __apply_kinematics(particle* particles, particle_kinematics* kinematics, const float timestep_s, const uint particle_capacity, const float3 subtract_offset)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_capacity) { return; }
 
 	if (!particles[idx].exists()) { return; }
 	float3 new_V = kinematics[idx].velocity_kms + kinematics[idx].acceleration_ms2 * timestep_s * .001f;
-	particles[idx].set_true_pos(particles[idx].true_pos() + new_V * timestep_s);
+	particles[idx].set_true_pos(particles[idx].true_pos() + new_V * timestep_s - subtract_offset);
 	kinematics[idx].velocity_kms = new_V;
 }
 
@@ -206,6 +206,9 @@ struct gravitational_simulation : spatial_grid
 {
 	particle_data_buffer<particle_kinematics> kinematic_data;
 	smart_gpu_buffer<grid_cell_ensemble> octree;
+private:
+	smart_cpu_buffer<grid_cell_ensemble> coarsest;
+public:
 
 	void set_massive_cuboid(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float3 dimensions, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
@@ -230,7 +233,7 @@ struct gravitational_simulation : spatial_grid
 	{
 		counting_sort_data_transfer(cell_bounds, targets, kinematic_data);
 	}
-	gravitational_simulation(size_t allocation_particles) : spatial_grid(allocation_particles), octree(__start_index(grid_dimension_pow + 1)), kinematic_data(allocation_particles) { }
+	gravitational_simulation(size_t allocation_particles) : spatial_grid(allocation_particles), octree(__start_index(grid_dimension_pow + 1)), kinematic_data(allocation_particles), coarsest(1u << (3u * minimum_depth)) { }
 	void generate_gravitational_data()
 	{
 		__average_ensemble<<<((uint)ceilf(cell_bounds.dedicated_len / 512.f)), 512u>>>(kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, octree.gpu_buffer_ptr);
@@ -241,6 +244,28 @@ struct gravitational_simulation : spatial_grid
 		}
 		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / (float)block_size_barnes_hut)), block_size_barnes_hut>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
 	}
+	void apply_kinematics(float timestep_s = 1.f, bool recenter = true)
+	{
+		uint threads = particle_capacity < 512u ? particle_capacity : 512u;
+		uint blocks = ceilf(particle_capacity / (float)threads);
+
+		float3 avg_pos = make_float3(0.f);
+		if (recenter)
+		{
+			cudaMemcpy(coarsest.cpu_buffer_ptr, octree.gpu_buffer_ptr, (1u << (3u * minimum_depth)) * sizeof(grid_cell_ensemble), cudaMemcpyDeviceToHost);
+
+			float total_mass = 1E-30f;
+			for (uint i = 0u; i < 1u << (3u * minimum_depth); i++)
+			{
+				grid_cell_ensemble target = coarsest.cpu_buffer_ptr[i];
+				avg_pos += (target.deviatoric_pos_km + __cell_pos_from_index(i, minimum_depth)) * target.total_mass_Tg;
+				total_mass += target.total_mass_Tg;
+			}
+			avg_pos = (avg_pos / total_mass) - domain_size_km * .5f;
+		}
+
+		__apply_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, timestep_s, particle_capacity, avg_pos);
+	}
 	void apply_gravitation()
 	{
 		uint threads = particle_capacity < 512u ? particle_capacity : 512u;
@@ -248,13 +273,7 @@ struct gravitational_simulation : spatial_grid
 
 		__apply_gravitation<<<blocks, threads>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_capacity);
 	}
-	void apply_kinematics(float timestep_s = 1.f)
-	{
-		uint threads = particle_capacity < 512u ? particle_capacity : 512u;
-		uint blocks = ceilf(particle_capacity / (float)threads);
 
-		__apply_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, timestep_s, particle_capacity);
-	}
 };
 
 #endif

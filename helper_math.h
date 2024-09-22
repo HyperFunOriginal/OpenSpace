@@ -2521,4 +2521,230 @@ inline std::string to_string(const rational& a)
     return std::to_string(a.numerator) + " / " + std::to_string(a.denominator);
 }
 
+
+struct float3x3
+{
+    float mat[9];
+
+    __host__ __device__ float3x3() : mat() {}
+    __host__ __device__ float3x3(const float3 x, const float3 y, const float3 z)
+    {
+        mat[0] = x.x;
+        mat[1] = x.y;
+        mat[2] = x.z;
+
+        mat[3] = y.x;
+        mat[4] = y.y;
+        mat[5] = y.z;
+
+        mat[6] = z.x;
+        mat[7] = z.y;
+        mat[8] = z.z;
+    }
+    inline __host__ __device__ float3 diag() const
+    {
+        return make_float3(mat[0], mat[4], mat[8]);
+    }
+    inline __host__ __device__ float index(const int c, const int r) const
+    {
+        return mat[c * 3 + r];
+    }
+    inline __host__ __device__ float3x3 transpose() const
+    {
+        float3x3 result;
+        result.mat[0] = mat[0];
+        result.mat[1] = mat[3];
+        result.mat[2] = mat[6];
+        result.mat[3] = mat[1];
+        result.mat[4] = mat[4];
+        result.mat[5] = mat[7];
+        result.mat[6] = mat[2];
+        result.mat[7] = mat[5];
+        result.mat[8] = mat[8];
+        return result;
+    }
+    inline __host__ __device__ void mad_column(const float3 v, float m, const int c)
+    {
+        mat[c * 3] += v.x * m;
+        mat[c * 3 + 1] += v.y * m;
+        mat[c * 3 + 2] += v.z * m;
+    }
+    inline __host__ __device__ void mad_row(const float3 v, float m, const int r)
+    {
+        mat[r] += v.x * m;
+        mat[r + 3] += v.y * m;
+        mat[r + 6] += v.z * m;
+    }
+    inline __host__ __device__ void set_column(const float3 v, const int c)
+    {
+        mat[c * 3] = v.x;
+        mat[c * 3 + 1] = v.y;
+        mat[c * 3 + 2] = v.z;
+    }
+    inline __host__ __device__ void set_row(const float3 v, const int r)
+    {
+        mat[r] = v.x;
+        mat[r + 3] = v.y;
+        mat[r + 6] = v.z;
+    }
+    inline __host__ __device__ float3 column(const int c) const
+    {
+        return make_float3(mat[c * 3], mat[c * 3 + 1], mat[c * 3 + 2]);
+    }
+    inline __host__ __device__ float3 row(const int r) const
+    {
+        return make_float3(mat[r], mat[r + 3], mat[r + 6]);
+    }
+    inline __host__ __device__ float3x3 operator-() const
+    {
+        float3x3 result;
+        result.mat[0] = -mat[0];
+        result.mat[1] = -mat[1];
+        result.mat[2] = -mat[2];
+        result.mat[3] = -mat[3];
+        result.mat[4] = -mat[4];
+        result.mat[5] = -mat[5];
+        result.mat[6] = -mat[6];
+        result.mat[7] = -mat[7];
+        result.mat[8] = -mat[8];
+        return result;
+    }
+    inline __host__ __device__ float3x3 operator-(const float3x3 a) const
+    {
+        float3x3 result;
+        result.mat[0] = mat[0] - a.mat[0];
+        result.mat[1] = mat[1] - a.mat[1];
+        result.mat[2] = mat[2] - a.mat[2];
+        result.mat[3] = mat[3] - a.mat[3];
+        result.mat[4] = mat[4] - a.mat[4];
+        result.mat[5] = mat[5] - a.mat[5];
+        result.mat[6] = mat[6] - a.mat[6];
+        result.mat[7] = mat[7] - a.mat[7];
+        result.mat[8] = mat[8] - a.mat[8];
+        return result;
+    }
+    inline __host__ __device__ float3x3 operator+(const float3x3 a) const
+    {
+        float3x3 result;
+        result.mat[0] = mat[0] + a.mat[0];
+        result.mat[1] = mat[1] + a.mat[1];
+        result.mat[2] = mat[2] + a.mat[2];
+        result.mat[3] = mat[3] + a.mat[3];
+        result.mat[4] = mat[4] + a.mat[4];
+        result.mat[5] = mat[5] + a.mat[5];
+        result.mat[6] = mat[6] + a.mat[6];
+        result.mat[7] = mat[7] + a.mat[7];
+        result.mat[8] = mat[8] + a.mat[8];
+        return result;
+    }
+    inline __host__ __device__ float3x3 operator/(const float a) const
+    {
+        float3x3 result;
+        result.mat[0] = mat[0] / a;
+        result.mat[1] = mat[1] / a;
+        result.mat[2] = mat[2] / a;
+        result.mat[3] = mat[3] / a;
+        result.mat[4] = mat[4] / a;
+        result.mat[5] = mat[5] / a;
+        result.mat[6] = mat[6] / a;
+        result.mat[7] = mat[7] / a;
+        result.mat[8] = mat[8] / a;
+        return result;
+    }
+    inline __host__ __device__ void operator*=(const float a) {
+        mat[0] *= a;
+        mat[1] *= a;
+        mat[2] *= a;
+        mat[3] *= a;
+        mat[4] *= a;
+        mat[5] *= a;
+        mat[6] *= a;
+        mat[7] *= a;
+        mat[8] *= a;
+    }
+    inline __host__ __device__ void operator+=(const float3x3 a) {
+        mat[0] += a.mat[0];
+        mat[1] += a.mat[1];
+        mat[2] += a.mat[2];
+        mat[3] += a.mat[3];
+        mat[4] += a.mat[4];
+        mat[5] += a.mat[5];
+        mat[6] += a.mat[6];
+        mat[7] += a.mat[7];
+        mat[8] += a.mat[8];
+    }
+    inline __host__ __device__ void operator-=(const float3x3 a) {
+        mat[0] -= a.mat[0];
+        mat[1] -= a.mat[1];
+        mat[2] -= a.mat[2];
+        mat[3] -= a.mat[3];
+        mat[4] -= a.mat[4];
+        mat[5] -= a.mat[5];
+        mat[6] -= a.mat[6];
+        mat[7] -= a.mat[7];
+        mat[8] -= a.mat[8];
+    }
+    inline __host__ __device__ void operator/=(const float a) {
+        mat[0] /= a;
+        mat[1] /= a;
+        mat[2] /= a;
+        mat[3] /= a;
+        mat[4] /= a;
+        mat[5] /= a;
+        mat[6] /= a;
+        mat[7] /= a;
+        mat[8] /= a;
+    }
+    inline __host__ __device__ float3x3 operator*(const float a) const
+    {
+        float3x3 result;
+        result.mat[0] = mat[0] * a;
+        result.mat[1] = mat[1] * a;
+        result.mat[2] = mat[2] * a;
+        result.mat[3] = mat[3] * a;
+        result.mat[4] = mat[4] * a;
+        result.mat[5] = mat[5] * a;
+        result.mat[6] = mat[6] * a;
+        result.mat[7] = mat[7] * a;
+        result.mat[8] = mat[8] * a;
+        return result;
+    }
+    inline __host__ __device__ float3 operator*(const float3 a) const
+    {
+        return column(0) * a.x + column(1) * a.y + column(2) * a.z;
+    }
+    inline __host__ __device__ float3x3 operator*(const float3x3 a) const
+    {
+        float3x3 result;
+        result.mat[0] = dot(row(0), a.column(0));
+        result.mat[1] = dot(row(1), a.column(0));
+        result.mat[2] = dot(row(2), a.column(0));
+        result.mat[3] = dot(row(0), a.column(1));
+        result.mat[4] = dot(row(1), a.column(1));
+        result.mat[5] = dot(row(2), a.column(1));
+        result.mat[6] = dot(row(0), a.column(2));
+        result.mat[7] = dot(row(1), a.column(2));
+        result.mat[8] = dot(row(2), a.column(2));
+        return result;
+    }
+    inline __host__ __device__ float trace() const { return mat[0] + mat[4] + mat[8]; }
+    inline __host__ __device__ float determinant() const {
+        return mat[0] * (mat[4] * mat[8] - mat[5] * mat[7]) - mat[3] * (mat[1] * mat[8] - mat[2] * mat[7]) + mat[6] * (mat[1] * mat[5] - mat[2] * mat[4]);
+    }
+    inline __host__ __device__ float3x3 inverse() const {
+        float3x3 result;
+        result.mat[0] = -mat[5] * mat[7] + mat[4] * mat[8];
+        result.mat[3] = mat[5] * mat[6] - mat[3] * mat[8];
+        result.mat[6] = -mat[4] * mat[6] + mat[3] * mat[7];
+        result.mat[1] = mat[2] * mat[7] - mat[1] * mat[8];
+        result.mat[4] = -mat[2] * mat[6] + mat[0] * mat[8];
+        result.mat[7] = mat[1] * mat[6] - mat[0] * mat[7];
+        result.mat[2] = -mat[2] * mat[4] + mat[1] * mat[5];
+        result.mat[5] = mat[2] * mat[3] - mat[0] * mat[5];
+        result.mat[8] = -mat[1] * mat[3] + mat[0] * mat[4];
+        return result / determinant();
+    }
+};
+
+
 #endif
