@@ -12,7 +12,6 @@ double one_second()
 }
 
 // Tunable
-constexpr uint frames = 2100u;
 constexpr float major_timestep = 10.f;
 constexpr uint physics_substeps = 1u;
 constexpr uint width = 512u;
@@ -23,6 +22,7 @@ int main()
     cudaError_t cudaStatus = cudaSetDevice(0);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
+        Sleep(5000);
         return 1;
     }
 
@@ -43,9 +43,9 @@ int main()
 
         double step_second = physics_substeps * one_second();
         gravitational_simulation simulation(particle_count);
-        simulation.set_massive_sphere(particle_count, 0, 5.97E+15f, 8000.f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(3.f, 0.f, 0.f), make_float3(-6E-4f));
+        simulation.set_massive_cuboid(particle_count, 0, 5.97E+15f, make_float3(10000.f, 7000.f, 12000.f), domain_size_km * make_float3(.5f, .5f, .5f), make_float3(3.f, 0.f, 0.f), make_float3(-6E-4f));
 
-        for (uint i = 0u; i < frames; i++)
+        for (uint i = 0u; ; i++)
         {
             const long long now = clock.now().time_since_epoch().count();
             for (uint j = 0u; j < physics_substeps; j++)
@@ -63,6 +63,7 @@ int main()
     cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceReset failed!");
+        Sleep(5000);
         return 1;
     }
 
