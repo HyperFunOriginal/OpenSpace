@@ -3,13 +3,10 @@
 #include "spatial_grid.h"
 
 // Tunable
+__device__ constexpr bool compute_fast_approx = true;
 __device__ constexpr bool compute_gravity_empty_cell = false;
 __device__ constexpr float barnes_hut_criterion = 0.35f;
 __device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
-
-// Derived
-__device__ constexpr uint block_size_barnes_hut = 64u >> (grid_dimension_pow - minimum_depth > 4); // constrained by shared memory
-__device__ constexpr uint min_stack_size_required = 2u + 7u * (grid_dimension_pow - minimum_depth);
 
 struct particle_kinematics
 {
@@ -30,6 +27,13 @@ struct grid_cell_ensemble
 	__device__ __host__ float average_density_kgm3() const { return total_mass_Tg / fmaxf(4.18879020479f * standard_radius_km * standard_radius_km * standard_radius_km, 1E-5f); }
 };
 
+// inexact approximation
+__device__ __host__ float grav_force_diffuse_unfactored_fast(float separation, float standard_deviation)
+{
+	standard_deviation *= 1.41421356237f;
+	return -1.f / (separation * separation * separation + standard_deviation * standard_deviation * standard_deviation * 1.35f);
+}
+// exact solution
 __device__ __host__ float grav_force_diffuse_unfactored(float separation, float standard_deviation)
 {
 	standard_deviation *= 1.41421356237f;
@@ -39,7 +43,8 @@ __device__ __host__ float grav_force_diffuse_unfactored(float separation, float 
 		return -1.f / (separation * separation * separation);
 	return 1.1283791671f * expf(-separation * separation / (standard_deviation * standard_deviation)) / (separation * separation * standard_deviation) - erf_lossy(separation / standard_deviation) / (separation * separation * separation);
 }
-__device__ __host__ constexpr uint __start_index(uint depth)
+
+__device__ __host__ constexpr uint __octree_depth_index(uint depth)
 {
 	return (mask_morton_x & ((~0u) >> (32u - depth * 3u))) - (mask_morton_x & ((~0u) >> (32u - minimum_depth * 3u)));
 }
@@ -48,7 +53,7 @@ __global__ void __average_ensemble(const particle_kinematics* kinematics, const 
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= grid_cell_count) { return; }
-	const uint start_pos = __read_start_idx(cell_pos, idx), end_pos = __read_start_idx(cell_pos, idx + 1);
+	const uint start_pos = __read_start_idx(cell_pos, idx), end_pos = __read_end_idx(cell_pos, idx);
 	const float3 this_cell_pos = __cell_pos_from_index(idx, grid_dimension_pow);
 
 	grid_cell_ensemble this_ensemble = grid_cell_ensemble();
@@ -68,7 +73,7 @@ __global__ void __average_ensemble(const particle_kinematics* kinematics, const 
 	this_ensemble.deviatoric_pos_km /= this_ensemble.total_mass_Tg;
 	variances = (variances / this_ensemble.total_mass_Tg) - this_ensemble.deviatoric_pos_km * this_ensemble.deviatoric_pos_km;
 	this_ensemble.standard_radius_km = sqrtf(variances.x + variances.y + variances.z);
-	grid_cells[idx + __start_index(grid_dimension_pow)] = this_ensemble;
+	grid_cells[idx + __octree_depth_index(grid_dimension_pow)] = this_ensemble;
 }
 __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint target_depth)
 {
@@ -81,7 +86,7 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 
 	for (uint i = idx * 8; i < (idx + 1) * 8; i++)
 	{
-		grid_cell_ensemble target = grid_cells[i + __start_index(target_depth + 1)];
+		grid_cell_ensemble target = grid_cells[i + __octree_depth_index(target_depth + 1)];
 		float3 rel_pos = target.deviatoric_pos_km + __cell_pos_from_index(i, target_depth + 1) - this_cell_pos;
 
 		this_ensemble.total_mass_Tg += target.total_mass_Tg;
@@ -92,71 +97,40 @@ __global__ void __mipmap_1_layer(grid_cell_ensemble* grid_cells, const uint targ
 	this_ensemble.deviatoric_pos_km /= this_ensemble.total_mass_Tg;
 	variances = (variances / this_ensemble.total_mass_Tg) - this_ensemble.deviatoric_pos_km * this_ensemble.deviatoric_pos_km;
 	this_ensemble.standard_radius_km = sqrtf(variances.x + variances.y + variances.z);
-	grid_cells[idx + __start_index(target_depth)] = this_ensemble;
-}
-
-struct octree_indexer
-{
-	uint data;
-	__device__ __host__ octree_indexer(const bool invalid = true) : data(invalid * (~0u)) {}
-	__device__ __host__ octree_indexer(const uint depth, const uint morton_index) : data((depth & 7u) << 29u | (morton_index & ((~0u) >> 3u))) {}
-	__device__ __host__ uint depth() const { return data >> 29u; }
-	__device__ __host__ uint morton_index() const { return data & ((~0u) >> 3u); }
-	__device__ __host__ bool valid() const { return ~data; }
-};
-__device__ __host__ uint stack_content(octree_indexer* ptrs)
-{
-	return ptrs[0].data;
-}
-__device__ __host__ void add_to_stack(octree_indexer* ptrs, octree_indexer data)
-{
-	ptrs[ptrs[0].data += 1u] = data;
-}
-__device__ __host__ octree_indexer pop_stack(octree_indexer* ptrs)
-{
-	uint loc = ptrs[0].data;
-	octree_indexer result = loc > 0u ? ptrs[loc] : octree_indexer();
-	ptrs[0].data -= loc > 0u; return result;
-}
-__device__ __host__ octree_indexer compute_gravity_check(const float3 this_pos, const grid_cell_ensemble* octree, octree_indexer* stack, float3& acceleration_ms2)
-{
-	const octree_indexer s = pop_stack(stack);
-	if (!s.valid()) { return s; }
-
-	const uint other_m = s.morton_index(), other_d = s.depth();
-	const grid_cell_ensemble other_c = octree[other_m + __start_index(other_d)];
-	float3 separation = this_pos - (other_c.deviatoric_pos_km + __cell_pos_from_index(other_m, other_d));
-	if ((other_c.standard_radius_km * other_c.standard_radius_km / dot(separation, separation) > barnes_hut_criterion * barnes_hut_criterion) && (other_d < grid_dimension_pow))
-		return s;
-
-	acceleration_ms2 += separation * (other_c.total_mass_Tg * G_in_Tg_km_units * grav_force_diffuse_unfactored(length(separation) + 1E-10f, other_c.standard_radius_km + 1E-10f));
-	return octree_indexer();
+	grid_cells[idx + __octree_depth_index(target_depth)] = this_ensemble;
 }
 
 __global__ void __compute_barnes_hut(grid_cell_ensemble* octree, const uint* cell_bounds)
 {
-	uint idx = threadIdx.x + block_size_barnes_hut * blockIdx.x; // block_size_barnes_hut = 64u
+	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= grid_cell_count) { return; }
 	float3 acceleration_ms2 = make_float3(0.f);
-	if (compute_gravity_empty_cell || __count_particles(cell_bounds, idx, grid_dimension_pow) > 0) {
-		__shared__ octree_indexer stacks[min_stack_size_required * block_size_barnes_hut]; // min_stack_size_required * block_size_barnes_hut = 1920u
-		octree_indexer* this_stack = stacks + threadIdx.x * min_stack_size_required;
-		float3 this_position_km = octree[idx + __start_index(grid_dimension_pow)].deviatoric_pos_km + __cell_pos_from_index(idx, grid_dimension_pow);
-		for (uint i = 0; i < 1u << (minimum_depth * 3u); i++)
-		{
-			this_stack[0].data = 0u;
-			add_to_stack(this_stack, octree_indexer(minimum_depth, i));
 
-			while (stack_content(this_stack) > 0u)
+	if (compute_gravity_empty_cell || __count_particles(cell_bounds, idx, grid_dimension_pow) > 0) {
+		float3 this_position_km = octree[idx + __octree_depth_index(grid_dimension_pow)].deviatoric_pos_km + __cell_pos_from_index(idx, grid_dimension_pow);
+		uint depth = minimum_depth; uint morton_index = 0u;
+
+		while (morton_index < (1u << (depth * 3u))) // implicit octree depth-first traversal
+		{
+			const grid_cell_ensemble other_c = octree[morton_index + __octree_depth_index(depth)];
+			float3 separation = this_position_km - (other_c.deviatoric_pos_km + __cell_pos_from_index(morton_index, depth));
+			if ((other_c.standard_radius_km * other_c.standard_radius_km / dot(separation, separation) > barnes_hut_criterion * barnes_hut_criterion) && (depth < grid_dimension_pow))
 			{
-				octree_indexer curr_check = compute_gravity_check(this_position_km, octree, this_stack, acceleration_ms2);
-				if (curr_check.valid())
-					for (uint i = 0u; i < 8u; i++)
-						add_to_stack(this_stack, octree_indexer(curr_check.depth() + 1u, (curr_check.morton_index() << 3u) + i));
+				depth++;
+				morton_index <<= 3u;
+				continue;
 			}
+			acceleration_ms2 += separation * (other_c.total_mass_Tg * G_in_Tg_km_units *
+				(compute_fast_approx ? grav_force_diffuse_unfactored_fast(length(separation) + 1E-10f, other_c.standard_radius_km + 1E-10f) : grav_force_diffuse_unfactored(length(separation) + 1E-10f, other_c.standard_radius_km + 1E-10f)));
+			if ((morton_index & 7u) == 7u && depth > 0)
+			{
+				morton_index >>= 3u;
+				depth--;
+			}
+			morton_index++;
 		}
 	}
-	octree[idx + __start_index(grid_dimension_pow)].average_acceleration_ms2 = acceleration_ms2;
+	octree[idx + __octree_depth_index(grid_dimension_pow)].average_acceleration_ms2 = acceleration_ms2;
 }
 __global__ void __init_kinematics(const particle* particles, particle_kinematics* kinematics, const uint particle_count, const uint offset, const float3 velocity,
 								const float3 center, const float3 angular_velocity, const float particle_mass, const float particle_radius)
@@ -165,9 +139,7 @@ __global__ void __init_kinematics(const particle* particles, particle_kinematics
 	if (idx >= particle_count) { return; }
 
 	float3 position_from_center = particles[idx + offset].true_pos() - center;
-	float3 tangential_vel = make_float3(position_from_center.z * angular_velocity.y - position_from_center.y * angular_velocity.z,
-										-position_from_center.z * angular_velocity.x + position_from_center.x * angular_velocity.z,
-										position_from_center.y * angular_velocity.x - position_from_center.x * angular_velocity.y);
+	float3 tangential_vel = cross(angular_velocity, position_from_center);
 
 	particle_kinematics kinematics_to_set = particle_kinematics();
 	kinematics_to_set.mass_Tg = particle_mass;
@@ -181,15 +153,16 @@ __global__ void __apply_gravitation(const grid_cell_ensemble* octree, const uint
 	if (idx >= particle_capacity) { return; }
 
 	if (!particles[idx].exists()) { return; }
-	float3 this_pos = particles[idx].true_pos();
+	int3 this_pos = make_int3(particles[idx].position >> 1u);
 	uint morton_index = particles[idx].morton_index();
-	float3 acceleration_ms2 = octree[morton_index + __start_index(grid_dimension_pow)].average_acceleration_ms2;
+	float3 acceleration_ms2 = octree[morton_index + __octree_depth_index(grid_dimension_pow)].average_acceleration_ms2;
 
-	for (uint i = __read_start_idx(cell_bounds, morton_index), j = __read_start_idx(cell_bounds, morton_index + 1u); i < j; i++)
+	for (uint i = __read_start_idx(cell_bounds, morton_index), j = __read_end_idx(cell_bounds, morton_index); i < j; i++)
 	{
 		if (i == idx) { continue; }
-		float3 separation = this_pos - particles[i].true_pos();
-		acceleration_ms2 += separation * (kinematics[i].mass_Tg * G_in_Tg_km_units * grav_force_diffuse_unfactored(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f));
+		float3 separation = make_float3(this_pos - make_int3(particles[i].position >> 1u)) * (domain_size_km / 2147483648.f); // greater precision in int than float; 31 bits vs 23 bits
+		acceleration_ms2 += separation * (kinematics[i].mass_Tg * G_in_Tg_km_units *
+			(compute_fast_approx ? grav_force_diffuse_unfactored_fast(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f) : grav_force_diffuse_unfactored(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f)));
 	}
 
 	kinematics[idx].acceleration_ms2 = acceleration_ms2;
@@ -236,7 +209,7 @@ public:
 	{
 		counting_sort_data_transfer(cell_bounds, targets, kinematic_data);
 	}
-	gravitational_simulation(size_t allocation_particles) : spatial_grid(allocation_particles), octree(__start_index(grid_dimension_pow + 1)), kinematic_data(allocation_particles), coarsest(1u << (3u * minimum_depth)) { }
+	gravitational_simulation(size_t allocation_particles) : spatial_grid(allocation_particles), octree(__octree_depth_index(grid_dimension_pow + 1)), kinematic_data(allocation_particles), coarsest(1u << (3u * minimum_depth)) { }
 	void generate_gravitational_data()
 	{
 		__average_ensemble<<<((uint)ceilf(cell_bounds.dedicated_len / 512.f)), 512u>>>(kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, octree.gpu_buffer_ptr);
@@ -245,7 +218,7 @@ public:
 			dim3 threads(min(512u, 1u << (3u * i)));
 			__mipmap_1_layer<<<((uint)ceilf((1u << (3u * i)) / (float)threads.x)), threads>>>(octree.gpu_buffer_ptr, i);
 		}
-		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / (float)block_size_barnes_hut)), block_size_barnes_hut>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
+		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / 512.f)), 512u>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
 	}
 	void apply_kinematics(float timestep_s = 1.f, bool recenter = true)
 	{
@@ -277,6 +250,34 @@ public:
 		__apply_gravitation<<<blocks, threads>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_capacity);
 	}
 
+};
+struct gravitational_renderer
+{
+	const particle_kinematics* kinematics;
+	const particle* particles;
+
+	gravitational_renderer(gravitational_simulation& simulation) : kinematics(simulation.kinematic_data.buffer.gpu_buffer_ptr), particles(simulation.particles.buffer.gpu_buffer_ptr) { }
+	__device__ float4 apply_colour_intersect(const float3 ray_position, const float3 ray_dir, const uint idx) const
+	{
+		float3 displacement = particles[idx].true_pos() - ray_position;
+		displacement -= dot(displacement, ray_dir) * ray_dir;
+		float dist = length(displacement) / kinematics[idx].radius_km;
+		float luminosity = sqrtf(fmaxf(0.f, 1.f - dist * dist));
+		return make_float4(luminosity, luminosity, luminosity, dist <= 1.f);
+	}
+	__device__ void closest_index_particle(float& closest_dst, uint& closest_idx, const float3 ray_position, const uint start, const uint end) const
+	{
+		for (uint i = start; i < end; i++)
+		{
+			float dist = length(particles[i].true_pos() - ray_position) - kinematics[i].radius_km * .85f;
+			if (dist < closest_dst)
+			{
+				closest_dst = dist;
+				closest_idx = i;
+			}
+		}
+		closest_dst = fmaxf(size_grid_cell_km * .07f, closest_dst);
+	}
 };
 
 #endif

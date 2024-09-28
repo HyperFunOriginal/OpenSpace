@@ -5,7 +5,7 @@
 // Tunable
 __device__ constexpr bool wrap_around = false;
 __device__ constexpr uint grid_dimension_pow = 7u;
-__device__ constexpr float domain_size_km = 40000.f;
+__device__ constexpr float domain_size_km = 27000.f;
 __device__ constexpr uint minimum_depth = 1u; // Already optimal
 
 // Derived
@@ -44,14 +44,13 @@ struct particle
 		pos /= domain_size_km;
 		if (wrap_around)
 			pos -= floorf(pos);
-		if (fminf(global_min(pos), 1.f - global_max(pos)) < 0.f)
+		if (fminf(global_min(pos), 0.999999940395355224609375f - global_max(pos)) < 0.f)
 			cell_and_existence = 0u;
 		else
-			position = make_uint3(pos * 4294967040.f);
+			position = make_uint3(pos * 4294967296.f);
 	}
 };
 static_assert(sizeof(particle) == 16, "Wrong size!");
-
 
 
 __device__ __host__ float3 __cell_pos_from_index(uint morton, uint depth) {
@@ -66,7 +65,7 @@ __device__ __host__ float3 __cell_pos_from_index(uint morton, uint depth) {
 }
 
 __device__ __host__ uint __morton_index(const float3 pos) {
-	uint3 position = make_uint3(clamp(pos / domain_size_km, 0.f, 1.f) * 4294967040.f); uint result = 0u;
+	uint3 position = make_uint3(clamp(pos / domain_size_km, 0.f, 0.999999940395355224609375f) * 4294967296.f); uint result = 0u;
 	for (uint i = 0u; i < grid_dimension_pow; i++)
 	{
 		result |= ((position.x >> (i + 32u - grid_dimension_pow)) & 1u) << (3u * i) |
@@ -79,6 +78,11 @@ __device__ __host__ uint __morton_index(const float3 pos) {
 __device__ __host__ uint __read_start_idx(const uint* cell_pos, const uint morton_index)
 {
 	return (morton_index == 0u) ? 0u : cell_pos[morton_index - 1u];
+}
+
+__device__ __host__ uint __read_end_idx(const uint* cell_pos, const uint morton_index)
+{
+	return cell_pos[morton_index];
 }
 
 __device__ __host__ uint __count_particles(const uint* cell_pos, uint morton_index, uint depth)
@@ -277,4 +281,17 @@ void counting_sort_data_transfer(const smart_gpu_buffer<uint>& cell_bounds, cons
 	buffer.swap_pointers();
 }
 
+struct point_renderer
+{
+	const particle* particles;
+
+	__device__ float4 apply_colour_intersect(const float3 ray_position, const float3 ray_dir, const uint idx) const
+	{
+		return make_float4(0.f);
+	}
+	__device__ void closest_index_particle(float& closest_dst, uint& closest_idx, const float3 ray_position, const uint start, const uint end) const
+	{
+
+	}
+};
 #endif
