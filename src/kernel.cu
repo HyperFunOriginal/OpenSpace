@@ -15,6 +15,8 @@ double one_second()
 constexpr uint frames = 2100u;
 constexpr float major_timestep = 10.f;
 constexpr uint physics_substeps = 1u;
+constexpr uint width = 512u;
+constexpr uint height = 512u;
 
 int main()
 {
@@ -27,14 +29,21 @@ int main()
     if (create_folder("SaveFolder"))
     {
         std::chrono::steady_clock clock;
-        camera cam_1 = camera(domain_size_km * make_float3(.5f, .5f, -1.f), make_float3(1.f, 0.f, 0.f), make_float3(0.f, 1.f, 0.f), 1.f);
         rng_state state(clock.now().time_since_epoch().count() >> 12u);
-        gravitational_simulation simulation(10000000);
-        gravitational_renderer renderer(simulation);
-        smart_gpu_cpu_buffer<uint> temp(512 * 512);
+        smart_gpu_cpu_buffer<uint> temp(width * height);
+
+        std::string line; writeline("Number of Particles?"); size_t particle_count = 100000u;
+        std::getline(std::cin, line); particle_count = std::stoul(line);
+        if (particle_count > 1000000u)
+        {
+            writeline("Are you sure you want to proceed with greater than 1 000 000 particles? \nRestart the program if not, and press enter otherwise.");
+            std::getline(std::cin, line);
+        }
+        writeline("Starting Simulation:\n");
 
         double step_second = physics_substeps * one_second();
-        simulation.set_massive_sphere(10000000, 0, 5.97E+15f, 8000.f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(3.f, 0.f, 0.f), make_float3(-6E-4f));
+        gravitational_simulation simulation(particle_count);
+        simulation.set_massive_sphere(particle_count, 0, 5.97E+15f, 8000.f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(3.f, 0.f, 0.f), make_float3(-6E-4f));
 
         for (uint i = 0u; i < frames; i++)
         {
@@ -47,8 +56,7 @@ int main()
                 simulation.apply_kinematics(major_timestep / physics_substeps);
             }
             writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string((clock.now().time_since_epoch().count() - now) * 1000.0 / step_second) + " ms");
-            //raymarch_render<gravitational_renderer>(temp, simulation, cam_1, renderer, 512, 512, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
-            save_octree_image(temp, simulation, 512, 512, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
+            save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
         }
     }
 

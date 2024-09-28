@@ -194,49 +194,52 @@ __global__ void ___write_image_raymarching(uint* pixels, const uint* cell_bounds
 
     uint depth = 0u; uint iter_count = 0u;
     float4 col = make_float4(0.f, 0.3f, .6f, 1.f);
-    float dist_step = __ray_cube_intersection(ray_dir, ray_position, domain_size_km);
-    if (isnan(dist_step)) { goto RETURN; }
-    ray_position += (domain_size_km * 1E-4f + dist_step) * ray_dir;
 
-    while (iter_count < 200u)
+    if (global_min(cam.position) < 0.f || global_max(cam.position) > domain_size_km)
+    {
+        float dist_step = __ray_cube_intersection(ray_dir, ray_position, domain_size_km);
+        if (isnan(dist_step)) { goto RETURN; }
+        ray_position += (domain_size_km * 4E-4f + dist_step) * ray_dir;
+    }
+
+    while (iter_count < 500u)
     {
     RESET:
+        iter_count++;
         const uint morton_index = __morton_index(ray_position);
         while (__count_particles(cell_bounds, morton_index, depth) == 0u) // Coarsen the view until it can't
         {
             if (depth == 0u) { goto RETURN; }
             depth--;
         }
-        iter_count++;
-        while (__count_particles(cell_bounds, morton_index, depth) != 0u) // Refine until it doesn't need to
-        {
-            if (depth >= grid_dimension_pow) // If at the most refined level, iterate through particles
-            {
-                const float3 grid_cell_corner_pos = floorf(ray_position / size_grid_cell_km) * size_grid_cell_km;
-                const uint start_idx = __read_start_idx(cell_bounds, morton_index), end_idx = __read_end_idx(cell_bounds, morton_index);
-
-                while (global_min(ray_position - grid_cell_corner_pos) >= 0.f && global_max(ray_position - grid_cell_corner_pos) <= size_grid_cell_km)
-                {
-                    float closest_dst = INFINITY; uint closest_idx = 0u;
-                    renderer.closest_index_particle(closest_dst, closest_idx, ray_position, start_idx, end_idx);
-                    float4 tgt_col = renderer.apply_colour_intersect(ray_position, ray_dir, closest_idx);
-                    col.x = lerp(col.x, tgt_col.x, tgt_col.w * col.w);
-                    col.y = lerp(col.y, tgt_col.y, tgt_col.w * col.w);
-                    col.z = lerp(col.z, tgt_col.z, tgt_col.w * col.w);
-                    col.w *= 1.f - tgt_col.w;
-                    if (col.w < 1E-4f) { goto RETURN; }
-                    ray_position += closest_dst * ray_dir; // sphere-tracing
-                }
-                goto RESET;
-            } 
+        while (__count_particles(cell_bounds, morton_index, depth) != 0u && depth <= grid_dimension_pow) // Refine until it doesn't need to
             depth++;
-        }
 
+        if (depth > grid_dimension_pow) // If at the most refined level, iterate through particles
+        {
+            const float3 grid_cell_corner_pos = floorf(ray_position / size_grid_cell_km) * size_grid_cell_km;
+            const uint start_idx = __read_start_idx(cell_bounds, morton_index), end_idx = __read_end_idx(cell_bounds, morton_index);
+
+            while (global_min(ray_position - grid_cell_corner_pos) >= 0.f && global_max(ray_position - grid_cell_corner_pos) <= size_grid_cell_km)
+            {
+                float closest_dst = INFINITY; uint closest_idx = 0u;
+                renderer.closest_index_particle(closest_dst, closest_idx, ray_position, start_idx, end_idx);
+                float4 tgt_col = renderer.apply_colour_intersect(ray_position, ray_dir, closest_idx);
+                col.x = lerp(col.x, tgt_col.x, tgt_col.w * col.w);
+                col.y = lerp(col.y, tgt_col.y, tgt_col.w * col.w);
+                col.z = lerp(col.z, tgt_col.z, tgt_col.w * col.w);
+                col.w *= 1.f - tgt_col.w;
+                if (col.w < 1E-4f) { goto RETURN; }
+                ray_position += closest_dst * ray_dir; // sphere-tracing
+            }
+            depth = grid_dimension_pow;
+            goto RESET;
+        }
         // found the largest empty cell, march through entire cell.
         const float cube_size = domain_size_km / (1u << depth);
-        dist_step = __ray_cube_intersection(ray_dir, ray_position - floorf(ray_position / cube_size) * cube_size, cube_size);
+        float dist_step = __ray_cube_intersection(ray_dir, ray_position - floorf(ray_position / cube_size) * cube_size, cube_size);
         if (isnan(dist_step)) { goto RETURN; }
-        ray_position += (domain_size_km * 1E-4f + dist_step) * ray_dir;
+        ray_position += (domain_size_km * 4E-4f + dist_step) * ray_dir;
     }
 
 RETURN:

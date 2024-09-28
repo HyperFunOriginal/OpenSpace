@@ -269,14 +269,14 @@ struct gravitational_renderer
 	{
 		for (uint i = start; i < end; i++)
 		{
-			float dist = length(particles[i].true_pos() - ray_position) - kinematics[i].radius_km * .85f;
+			float dist = length(particles[i].true_pos() - ray_position) - kinematics[i].radius_km * .8f;
 			if (dist < closest_dst)
 			{
 				closest_dst = dist;
 				closest_idx = i;
 			}
 		}
-		closest_dst = fmaxf(size_grid_cell_km * .07f, closest_dst);
+		closest_dst = fmaxf(kinematics[closest_idx].radius_km * .2f, closest_dst);
 	}
 };
 

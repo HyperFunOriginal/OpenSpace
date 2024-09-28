@@ -56,6 +56,7 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
+      <CodeGeneration>compute_75,sm_75</CodeGeneration>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -81,20 +82,20 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="kernel.cu" />
+    <CudaCompile Include="src\kernel.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="CUDA_memory.h" />
-    <ClInclude Include="cum_sum.h" />
-    <ClInclude Include="gravitation.h" />
-    <ClInclude Include="helper_math.h" />
-    <ClInclude Include="lodepng.h" />
-    <ClInclude Include="printstring_helper.h" />
-    <ClInclude Include="raymarch.h" />
-    <ClInclude Include="spatial_grid.h" />
+    <ClInclude Include="src\CUDA_memory.h" />
+    <ClInclude Include="src\cum_sum.h" />
+    <ClInclude Include="src\gravitation.h" />
+    <ClInclude Include="src\helper_math.h" />
+    <ClInclude Include="src\lodepng.h" />
+    <ClInclude Include="src\printstring_helper.h" />
+    <ClInclude Include="src\raymarch.h" />
+    <ClInclude Include="src\spatial_grid.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="lodepng.cpp" />
+    <ClCompile Include="src\lodepng.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
