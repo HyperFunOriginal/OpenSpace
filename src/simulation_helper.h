@@ -7,13 +7,13 @@
 // Tunable
 __device__ constexpr bool wrap_around = false;
 __device__ constexpr uint grid_dimension_pow = 7u;
-__device__ constexpr float domain_size_km = 40000.f;
+__device__ constexpr float domain_size_km = 30000.f;
 __device__ constexpr uint minimum_depth = 1u; // Already optimal
 
 // Derived
 __device__ constexpr uint grid_side_length = 1u << grid_dimension_pow;
 __device__ constexpr uint grid_cell_count = 1u << (3u * grid_dimension_pow);
-__device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length;
+__device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length; // must be >3x particle radius
 
 //////////////////////////////////
 ////	  Morton Indexing	  ////
@@ -137,7 +137,7 @@ inline __host__ __device__ float __ray_cube_intersection(float3 ray, float3 disp
 		if (fminf(x, y) >= 0.f && fmaxf(x, y) <= cube_size)
 			closest = fminf(closest, ratios_r.z);
 	}
-	return isfinite(closest) ? closest : nan(0);
+	return isfinite(closest) ? closest : nanf("");
 }
 
 __device__ constexpr uint ___morton_offsets[3] = { 0u, 1u, 8u };
@@ -172,17 +172,15 @@ struct morton_cell_iterator
 			| (___morton_offsets[(current_idx / 3u) % 3u] << 1u)
 			| (___morton_offsets[current_idx / 9u] << 2u));
 	}
-
-	__device__ __host__ morton_cell_iterator() {}
-
-	/// <summary>
-	/// Yields an iterator over nearby cells.
-	/// </summary>
-	/// <param name="center_morton_idx">: Morton index of the relevant cell.</param>
-	/// <param name="displacement_from_000_corner">: Position of the point in question.</param>
-	/// <param name="depth">: Depth of the cell.</param>
-	/// <param name="tolerance">: Tolerance allowed as a proportion of a cell</param>
-	/// <returns></returns>
+	__device__ __host__ morton_cell_iterator() : bitmask(), morton() {}
+	__device__ __host__ morton_cell_iterator(uint center_morton_idx) : bitmask(0x07ffffffu), morton(center_morton_idx)
+	{
+		morton = sub_morton_indices(center_morton_idx, 7u);
+		uint temp = bounds(center_morton_idx, grid_dimension_pow);
+#pragma unroll
+		for (uint i = 0; i < 6; i++)
+			bitmask &= ~(___bitmasks_iterator[i] * ((temp & (1u << i)) != 0u));
+	}
 	__device__ __host__ morton_cell_iterator(uint center_morton_idx, float3 displacement_from_000_corner, uint depth, float tolerance) : bitmask(0u), morton(center_morton_idx)
 	{
 		displacement_from_000_corner *= (1u << depth) / domain_size_km;

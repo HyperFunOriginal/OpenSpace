@@ -48,6 +48,16 @@ struct particle_kinematics
 	float radius_km;
 	float3 velocity_kms;
 	float3 acceleration_ms2;
+	__device__ __host__ void multiply_radius(float change_factor = 1.f, float min_rad = 100.f, float max_rad = 1000.f)
+	{
+		radius_km = fminf(fmaxf(radius_km * change_factor, min_rad), max_rad);
+	}
+	__device__ __host__ void change_mass(particle* particle, float change_Tg = 0.f)
+	{
+		mass_Tg += change_Tg;
+		if (mass_Tg <= 0.f)
+			particle->cell_and_existence = 0u;
+	}
 	__device__ __host__ particle_kinematics() : velocity_kms(make_float3(0.f)), acceleration_ms2(make_float3(0.f)), mass_Tg(1E-40f), radius_km(0.f) {}
 };
 static_assert(sizeof(particle_kinematics) == 32, "Wrong size!");
@@ -55,13 +65,11 @@ static_assert(sizeof(particle_kinematics) == 32, "Wrong size!");
 template <class T>
 struct particle_data_buffer
 {
-	smart_gpu_cpu_buffer<T> buffer;
+	smart_gpu_buffer<T> buffer;
 	smart_gpu_buffer<T> temp;
 	particle_data_buffer(size_t dedicated_len) : buffer(dedicated_len), temp(dedicated_len) {}
-	void swap_pointers() { buffer.swap_gpu_pointers(temp); }
+	void swap_pointers() { buffer.swap_pointers(temp); }
 	void destroy() { buffer.destroy(); temp.destroy(); }
-	void copy_to_cpu() { buffer.copy_to_cpu(); }
-	void copy_to_gpu() { buffer.copy_to_gpu(); }
 };
 
 //////////////////////////////////////
@@ -150,7 +158,7 @@ __global__ void __init_cuboid(particle* particles, const uint particle_count, co
 	float3 positions = make_float3(positions_in_shape);
 	positions.x += ((positions_in_shape.y % 2u) + (positions_in_shape.z % 2u)) * .5f - .5f;
 	positions.y = (positions.y + (positions_in_shape.z % 2u) * .5f - .5f) * 0.86602540378f; positions.z *= 0.75f;
-	
+	positions.x += positions_in_shape.x * .3333333333f / (float)layers.x - .1666666666f;
 
 	to_set.set_existence(true);
 	to_set.set_true_pos(center + (positions - make_float3(layers - 1u) * make_float3(.5f, 0.43301270189f, .375f)) * particle_spacing);
@@ -171,6 +179,7 @@ __global__ void __init_kinematics(const particle* particles, particle_kinematics
 	float3 tangential_vel = cross(angular_velocity, position_from_center);
 
 	particle_kinematics kinematics_to_set = particle_kinematics();
+	float dst_center = length(position_from_center);
 	kinematics_to_set.mass_Tg = particle_mass;
 	kinematics_to_set.radius_km = particle_radius;
 	kinematics_to_set.velocity_kms = velocity + tangential_vel;
@@ -211,7 +220,7 @@ struct kinematic_simulation
 
 		__init_cuboid<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, layers, center_km, average_radius);
 		__init_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, velocity_kms,
-			center_km, angular_vel_rads, total_mass_Tg / particle_count, average_radius); cuda_sync();
+			center_km, angular_vel_rads, total_mass_Tg / particle_count, average_radius * 1.15470053838f); cuda_sync();
 	}
 	void set_sphere(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float total_radius_km, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
@@ -234,7 +243,7 @@ struct kinematic_simulation
 		dim3 threads(particles.buffer.dedicated_len > 512u ? 512u : particles.buffer.dedicated_len);
 		dim3 blocks((uint)ceilf(particles.buffer.dedicated_len / (float)threads.x));
 
-		__set_empty<<<threads, blocks>>>(particles.buffer.gpu_buffer_ptr, particles.buffer.dedicated_len);
+		__set_empty<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particles.buffer.dedicated_len);
 	}
 	void apply_kinematics(float timestep_s = 1.f)
 	{
@@ -262,7 +271,6 @@ struct kinematic_simulation
 };
 
 #include <vector>
-
 struct initial_kinematic_object
 {
 	enum geometry
@@ -276,13 +284,28 @@ struct initial_kinematic_object
 	float3 center_pos_km;
 	float total_mass_Tg;
 
-	uint particle_count;
 	geometry geometry_type;
 	std::vector<float> dimensions;
 
-	initial_kinematic_object(uint particle_count, geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
+	float volume_ratio() const {
+		float temp_var;
+		switch (geometry_type)
+		{
+		case initial_kinematic_object::GEOM_SPHERE:
+			temp_var = dimensions[0] / domain_size_km;
+			temp_var *= temp_var * temp_var * 4.18879020479f;
+			break;
+		case initial_kinematic_object::GEOM_CUBOID:
+			temp_var = dimensions[0] / domain_size_km;
+			temp_var *= dimensions[1] / domain_size_km;
+			temp_var *= dimensions[2] / domain_size_km;
+			break;
+		}
+		return temp_var;
+	}
+	initial_kinematic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
 		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f)) : 
-		dimensions(dimensions), geometry_type(geometry_type), particle_count(particle_count), total_mass_Tg(total_mass_Tg), center_pos_km(center_pos_km), velocity_kms(velocity_kms), angular_velocity_rads(angular_velocity_rads)
+		dimensions(dimensions), geometry_type(geometry_type), total_mass_Tg(total_mass_Tg), center_pos_km(center_pos_km), velocity_kms(velocity_kms), angular_velocity_rads(angular_velocity_rads)
 	{
 		switch (geometry_type)
 		{
@@ -297,26 +320,90 @@ struct initial_kinematic_object
 		}
 	}
 };
-void initialize_kinematic_objects(kinematic_simulation& simulation, const std::vector<initial_kinematic_object>& objects)
+std::vector<uint> find_apportionment_hamilton(const uint max_particles, const std::vector<initial_kinematic_object>& objects, float3& avg_vel)
 {
-	uint offsets = 0u;
-	for (uint i = 0u, s = objects.size(); i < s; i++)
+	const uint object_count = objects.size();
+	std::vector<uint> apportionment(object_count);
+
+	float total_volume = 0.f, total_mass = 0.f;
+	for (uint i = 0u; i < object_count; i++)
+		total_volume += objects[i].volume_ratio();
+
+	uint used_count = 0u; avg_vel = make_float3(0.f);
+	std::vector<float> truncation_error(object_count);
+	for (uint i = 0u; i < object_count; i++)
+	{
+		float target_particles = (float)max_particles * objects[i].volume_ratio() / total_volume;
+		apportionment[i] = (uint)fmaxf(1.5f, target_particles);
+		truncation_error[i] = target_particles - apportionment[i];
+		used_count += apportionment[i];
+
+		total_mass += objects[i].total_mass_Tg * 1E-12f;
+		avg_vel += objects[i].velocity_kms * (objects[i].total_mass_Tg * 1E-12f);
+	}
+	avg_vel /= fmaxf(total_mass, 1E-20f);
+
+	while (used_count < max_particles)
+	{
+		uint tr_idx = 0u;
+		float max_trunc_error = truncation_error[0];
+		for (uint i = 1u; i < object_count; i++)
+			if (truncation_error[i] > max_trunc_error)
+			{
+				max_trunc_error = truncation_error[i];
+				tr_idx = i;
+			}
+
+		apportionment[tr_idx]++;
+		truncation_error[tr_idx]--;
+		used_count++;
+	}
+	while (used_count > max_particles)
+	{
+		uint max_apportionment_idx = 0u;
+		float max_apportionment = -INFINITY;
+		for (uint i = 0u; i < object_count; i++)
+		{
+			if (apportionment[i] <= 1)
+				continue;
+			float ratio = (float)apportionment[i] * total_volume /
+				((float)max_particles * objects[i].volume_ratio());
+			if (ratio > max_apportionment)
+			{
+				max_apportionment = ratio;
+				max_apportionment_idx = i;
+			}
+		}
+
+		apportionment[max_apportionment_idx]--;
+		used_count--;
+	}
+	return apportionment;
+}
+void initialize_kinematic_objects(kinematic_simulation& simulation, const std::vector<initial_kinematic_object>& objects, bool center_of_mass_frame = true)
+{
+	uint offsets = 0u; const uint object_count = objects.size();
+	if (object_count == 0u) { return; } float3 average_vel;
+	std::vector<uint> particle_counts = find_apportionment_hamilton(simulation.particle_capacity, objects, average_vel);
+	if (!center_of_mass_frame) { average_vel = make_float3(0.f); }
+
+	for (uint i = 0u; i < object_count; i++)
 	{
 		const initial_kinematic_object& obj = objects[i];
-		if (obj.particle_count + offsets > simulation.particle_capacity)
-			throw std::out_of_range("Out of particles to instantiate object.");
-
 		switch (obj.geometry_type)
 		{
 			case initial_kinematic_object::GEOM_SPHERE:
-				simulation.set_sphere(obj.particle_count, offsets, obj.total_mass_Tg, obj.dimensions[0], obj.center_pos_km, obj.velocity_kms, obj.angular_velocity_rads);
+				simulation.set_sphere(particle_counts[i], offsets, obj.total_mass_Tg, obj.dimensions[0], obj.center_pos_km, obj.velocity_kms - average_vel, obj.angular_velocity_rads);
+				writeline("Creating sphere with particle count " + std::to_string(particle_counts[i]));
 				break;
 			case initial_kinematic_object::GEOM_CUBOID:
-				simulation.set_cuboid(obj.particle_count, offsets, obj.total_mass_Tg, make_float3(obj.dimensions[0], obj.dimensions[1], obj.dimensions[2]), obj.center_pos_km, obj.velocity_kms, obj.angular_velocity_rads);
+				simulation.set_cuboid(particle_counts[i], offsets, obj.total_mass_Tg, make_float3(obj.dimensions[0], obj.dimensions[1], obj.dimensions[2]), obj.center_pos_km, obj.velocity_kms - average_vel, obj.angular_velocity_rads);
+				writeline("Creating cuboid with particle count " + std::to_string(particle_counts[i]));
 				break;
 		}
-		offsets += obj.particle_count;
+		offsets += particle_counts[i];
 	}
+	writeline("");
 }
 
 #endif

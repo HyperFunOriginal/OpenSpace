@@ -2237,14 +2237,6 @@ inline __host__ __device__ float elliptic_integral_first_kind(float k)
     return elliptic_integral_first_kind_mathematica(k * k);
 }
 
-// erf(x)
-inline __host__ __device__ float erf_lossy(float x)
-{
-    const int sgn = sign(x); x = fabsf(x); float temp = x * x;
-    x = 1.f + 0.278393f * x + 0.230389f * temp + 0.000972f * temp * x + 0.078108f * temp * temp; x *= x; x *= x;
-    return (1.f - 1.f / x) * sgn;
-}
-
 // W_f(x)
 inline __host__ __device__ float lambert_W_fast(const float x)
 {

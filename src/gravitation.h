@@ -37,7 +37,7 @@ __device__ __host__ float grav_acc_factor(float separation, float standard_devia
 		return -0.75225277806f / (standard_deviation * standard_deviation * standard_deviation);
 	if (separation > 3.f * standard_deviation)
 		return -1.f / (separation * separation * separation);
-	return 1.1283791671f * expf(-separation * separation / (standard_deviation * standard_deviation)) / (separation * separation * standard_deviation) - erf_lossy(separation / standard_deviation) / (separation * separation * separation);
+	return 1.1283791671f * expf(-separation * separation / (standard_deviation * standard_deviation)) / (separation * separation * standard_deviation) - erff(separation / standard_deviation) / (separation * separation * separation);
 }
 
 ////////////////////////////////////
@@ -164,7 +164,7 @@ __global__ void __apply_gravitation(const grid_cell_ensemble* octree, const uint
 ////	  Main Structures	  ////
 //////////////////////////////////
 
-struct gravitational_simulation : kinematic_simulation
+struct gravitational_simulation : virtual public kinematic_simulation
 {
 	smart_gpu_buffer<grid_cell_ensemble> octree;
 private:
@@ -182,7 +182,7 @@ public:
 		}
 		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / 512.f)), 512u>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
 	}
-	void apply_kinematics_recenter(float timestep_s)
+	void apply_kinematics_recenter(float timestep_s, float recenter_strength = 1.f)
 	{
 		uint threads = particle_capacity < 512u ? particle_capacity : 512u;
 		uint blocks = ceilf(particle_capacity / (float)threads);
@@ -199,7 +199,7 @@ public:
 		}
 		avg_pos = (avg_pos / total_mass) - domain_size_km * .5f;
 
-		__apply_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, timestep_s, particle_capacity, avg_pos);
+		__apply_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, timestep_s, particle_capacity, avg_pos * (1.f - expf(-timestep_s * recenter_strength)));
 		cuda_sync();
 	}
 	void apply_gravitation()
