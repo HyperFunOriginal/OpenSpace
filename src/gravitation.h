@@ -157,7 +157,7 @@ __global__ void __apply_gravitation(const grid_cell_ensemble* octree, const uint
 			(compute_fast_approx ? grav_acc_factor_fast(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f) : grav_acc_factor(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f)));
 	}
 
-	kinematics[idx].acceleration_ms2 = acceleration_ms2;
+	kinematics[idx].acceleration_ms2 += acceleration_ms2;
 }
 
 //////////////////////////////////

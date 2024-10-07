@@ -77,17 +77,14 @@ __global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* ce
     uint coords = idx.y * width + idx.x;
     uint morton_index = __morton_index(make_float3(idx.x * domain_size_km / (float)width, idx.y * domain_size_km / (float)height, 0.f));
     float pseudo_depth = 0.f;
-    float pseudo_density = 0.f;
 
-    for (uint i = morton_index, float closeness = .5f / grid_side_length - .35f; i < (grid_cell_count >> 1u); i = add_morton_indices(i, 4u), closeness += 2.f / grid_side_length)
+    for (uint i = morton_index, float closeness = .5f / grid_side_length; i < grid_cell_count; i = add_morton_indices(i, 4u), closeness += 1.f / grid_side_length)
     {
         float display_depth = 2.f * closeness - 1.f; display_depth *= 1.11803398875f * rsqrtf(1.f + display_depth * display_depth * 4.f); display_depth += .5f;
-        float density_factor = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 3E+3f);
-        pseudo_density = lerp(density_factor * density_factor * .02f, pseudo_density, expf(-density_factor));
-        pseudo_depth = lerp(display_depth, pseudo_depth, expf(-density_factor));
+        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 1E+3f);
+        pseudo_depth = lerp(closeness, pseudo_depth, expf(-optical_thickness * size_grid_cell_km * 1E-2f));
     }
-
-    pixels[coords] = ___rgba(make_float4(pseudo_depth + pseudo_density, pseudo_depth + pseudo_density, pseudo_depth - pseudo_density, 1.f));
+    pixels[coords] = ___rgba(make_float4(pseudo_depth, pseudo_depth, pseudo_depth, 1.f));
 }
 void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_simulation& simulation, const int width, const int height, const char* filename)
 {

@@ -198,7 +198,6 @@ __global__ void __apply_kinematics(particle* particles, particle_kinematics* kin
 	kinematics[idx].acceleration_ms2 = make_float3(0.f);
 }
 
-
 //////////////////////////////////
 ////	  Main Structures	  ////
 //////////////////////////////////
@@ -287,6 +286,8 @@ struct initial_kinematic_object
 	geometry geometry_type;
 	std::vector<float> dimensions;
 
+	initial_kinematic_object() {}
+
 	float volume_ratio() const {
 		float temp_var;
 		switch (geometry_type)
@@ -320,7 +321,7 @@ struct initial_kinematic_object
 		}
 	}
 };
-std::vector<uint> find_apportionment_hamilton(const uint max_particles, const std::vector<initial_kinematic_object>& objects, float3& avg_vel)
+std::vector<uint> find_apportionment_hamilton(const uint max_particles, const std::vector<initial_kinematic_object>& objects, float3* avg_vel)
 {
 	const uint object_count = objects.size();
 	std::vector<uint> apportionment(object_count);
@@ -329,7 +330,13 @@ std::vector<uint> find_apportionment_hamilton(const uint max_particles, const st
 	for (uint i = 0u; i < object_count; i++)
 		total_volume += objects[i].volume_ratio();
 
-	uint used_count = 0u; avg_vel = make_float3(0.f);
+	float avg_num_part_per_cell = max_particles / (total_volume * grid_cell_count);
+	if (avg_num_part_per_cell < 8.f)
+		writeline("Warning! Less than 8 particles per cell on average. Hydrodynamical simulations will fail.");
+	writeline("Average number of particles per cell: " + std::to_string(avg_num_part_per_cell));
+
+	uint used_count = 0u;
+	if (avg_vel != nullptr) { *avg_vel = make_float3(0.f); }
 	std::vector<float> truncation_error(object_count);
 	for (uint i = 0u; i < object_count; i++)
 	{
@@ -338,10 +345,11 @@ std::vector<uint> find_apportionment_hamilton(const uint max_particles, const st
 		truncation_error[i] = target_particles - apportionment[i];
 		used_count += apportionment[i];
 
+		if (avg_vel == nullptr) { continue; }
 		total_mass += objects[i].total_mass_Tg * 1E-12f;
-		avg_vel += objects[i].velocity_kms * (objects[i].total_mass_Tg * 1E-12f);
+		*avg_vel += objects[i].velocity_kms * (objects[i].total_mass_Tg * 1E-12f);
 	}
-	avg_vel /= fmaxf(total_mass, 1E-20f);
+	if (avg_vel != nullptr) { *avg_vel /= fmaxf(total_mass, 1E-20f); }
 
 	while (used_count < max_particles)
 	{
@@ -380,11 +388,11 @@ std::vector<uint> find_apportionment_hamilton(const uint max_particles, const st
 	}
 	return apportionment;
 }
-void initialize_kinematic_objects(kinematic_simulation& simulation, const std::vector<initial_kinematic_object>& objects, bool center_of_mass_frame = true)
+std::vector<uint> initialize_kinematic_objects(kinematic_simulation& simulation, const std::vector<initial_kinematic_object>& objects, bool center_of_mass_frame = true)
 {
 	uint offsets = 0u; const uint object_count = objects.size();
-	if (object_count == 0u) { return; } float3 average_vel;
-	std::vector<uint> particle_counts = find_apportionment_hamilton(simulation.particle_capacity, objects, average_vel);
+	if (object_count == 0u) { return std::vector<uint>(0u); } float3 average_vel;
+	std::vector<uint> particle_counts = find_apportionment_hamilton(simulation.particle_capacity, objects, &average_vel);
 	if (!center_of_mass_frame) { average_vel = make_float3(0.f); }
 
 	for (uint i = 0u; i < object_count; i++)
@@ -404,6 +412,7 @@ void initialize_kinematic_objects(kinematic_simulation& simulation, const std::v
 		offsets += particle_counts[i];
 	}
 	writeline("");
+	return particle_counts;
 }
 
 #endif
