@@ -12,10 +12,9 @@ __device__ constexpr uint max_material_count = 16u;
 ////	     Stability		  ////
 //////////////////////////////////
 
-__device__ constexpr float max_heat_tick_ratio = .1f;  // Maximum percentage of specific internal energy change per tick; remaining heat added in later ticks. 
-													   // Used to prevent instabilities in thermodynamic calculations. Larger = more accurate but more unstable.
-__device__ constexpr float max_heat_tick_TJTg = 100.f; // Same as above; adds constant to clamp.
 __device__ constexpr float max_acceleration_factor_tick = 1E+5f; // Deletes particles with sudden accelerations too high to be reasonable.
+__device__ constexpr float particle_radius_stabilizer = .005f; // Between 0 and 1. Lerps radii to their density-derived values with each tick over divergence iteration.
+__device__ constexpr float reference_speed_of_sound_kms = 5.f; // Reference speed of sound for monaghan viscosity.
 
 
 struct material_properties
@@ -55,17 +54,9 @@ struct particle_thermodynamics
 	uint material_index;
 	float specific_internal_energy_TJTg;
 	float density_change_rate;
-	float turbulent_kinetic_energy; // Numerical stabiliser akin to turbulent KE.
+	float padding;
 
-	__device__ __host__ void change_internal_energy(float energy_change) {
-		energy_change *= .5f;
-		float transfer = clamp(turbulent_kinetic_energy += energy_change,
-			            fmaxf(-sqrtf(specific_internal_energy_TJTg * max_heat_tick_ratio) - max_heat_tick_TJTg, .01f - specific_internal_energy_TJTg), 
-			            sqrtf(specific_internal_energy_TJTg * max_heat_tick_ratio) + max_heat_tick_TJTg); // viscosity approximately proportional to sqrt internal energy.
-		specific_internal_energy_TJTg += transfer;
-		turbulent_kinetic_energy += energy_change - transfer;
-	}
-	__device__ __host__ particle_thermodynamics() : material_index(0u), specific_internal_energy_TJTg(150.f), density_change_rate(0.f), turbulent_kinetic_energy(0.f) {}
+	__device__ __host__ particle_thermodynamics() : material_index(0u), specific_internal_energy_TJTg(150.f), density_change_rate(0.f), padding(0.f) {}
 };
 struct SPH_variables
 {
@@ -79,11 +70,13 @@ struct SPH_variables
 //// Smoothed Particle Hydrodynamics ////
 /////////////////////////////////////////
 
-__constant__ __device__ material_properties materials[max_material_count];
+__constant__ __device__ material_properties materials[max_material_count]; // Resides in constant memory. Needs to be sufficiently small.
+static_assert(sizeof(material_properties) * max_material_count < 4096u, "Constant memory insufficient!");
+
 inline __device__ __host__ float ___sph_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
 {
-	this_radius_km = this_radius_km * this_radius_km + other_radius_km * other_radius_km;
-	return expf(-0.5f * sq_displacement_km2 / this_radius_km) * 0.06349363593424097f / (this_radius_km * sqrtf(this_radius_km));
+	this_radius_km = 0.5f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
+	return expf(-sq_displacement_km2 / this_radius_km) * 0.17958712212f / (this_radius_km * sqrtf(this_radius_km));
 }
 __device__ constexpr float __sq_dist_cutoff = sph_cutoff_radius * size_grid_cell_km * sph_cutoff_radius * size_grid_cell_km;
 
@@ -155,14 +148,15 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 			density_rate_change_kgm3s -= dot(displacement, relative_velocity);
 
 			displacement *= ((average[i].pressure_GPa / (other_density * other_density) + this_data.pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f // pressure
-			+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_alpha + monaghan_viscosity_parameter * sph_monaghan_viscosity_beta) * 2000.f / (other_density + this_data.avg_density_kgm3)); // artificial viscosity; needs factor of 1000 for units to work out
+			+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_alpha + monaghan_viscosity_parameter * sph_monaghan_viscosity_beta)
+		    * (reference_speed_of_sound_kms * 2000.f) / (other_density + this_data.avg_density_kgm3)); // artificial viscosity; needs factor of 1000 for units to work out
 			
 			hydrodynamic_acceleration_ms2 += displacement;
 			specific_internal_energy_change_TJTg += dot(displacement, relative_velocity);
 		}
 
 	kinematics[idx].acceleration_ms2 += hydrodynamic_acceleration_ms2;
-	thermodynamics[idx].change_internal_energy(0.5f * specific_internal_energy_change_TJTg * timestep);
+	thermodynamics[idx].specific_internal_energy_TJTg += .5f * specific_internal_energy_change_TJTg * timestep;
 	thermodynamics[idx].density_change_rate = density_rate_change_kgm3s;
 }
 __global__ void __step_particle_data(const SPH_variables* average, const particle_thermodynamics* thermodynamics, particle_kinematics* kinematics, particle* particles, const uint particle_capacity, const float timestep)
@@ -170,9 +164,15 @@ __global__ void __step_particle_data(const SPH_variables* average, const particl
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	
 	if (idx >= particle_capacity) { return; }
-	const float min_allowable_radius = cbrtf(kinematics[idx].mass_Tg / materials[thermodynamics[idx].material_index].standard_density_kgm3) * 0.1f;
-	const float factor = expf(thermodynamics[idx].density_change_rate * timestep * .33333333333f / average[idx].avg_density_kgm3);
-	kinematics[idx].multiply_radius(factor, min_allowable_radius, sph_cutoff_radius * size_grid_cell_km * .42f);
+	const float standard_density = materials[thermodynamics[idx].material_index].standard_density_kgm3;
+	const float actual_density = average[idx].avg_density_kgm3;
+	const float curr_radius = kinematics[idx].radius_km;
+	const float reference_radius = cbrtf(kinematics[idx].mass_Tg / standard_density) * 0.62035049089f;
+
+	float factor = logf(reference_radius / curr_radius) * particle_radius_stabilizer;
+	factor = expf(thermodynamics[idx].density_change_rate * timestep * (.33333333333f * (1.f - particle_radius_stabilizer)) / actual_density + factor);
+
+	kinematics[idx].multiply_radius(factor, reference_radius * .1f, sph_cutoff_radius * size_grid_cell_km * .42f);
 	if (length(kinematics[idx].acceleration_ms2) * timestep * timestep > max_acceleration_factor_tick)
 		particles[idx].set_existence(false);
 }
@@ -262,85 +262,61 @@ struct hydrogravitational_simulation : virtual public hydrodynamics_simulation, 
 };
 
 
-//////////////////////////////////
-////	    XSPH Variant 	  ////
-//////////////////////////////////
 
-__device__ constexpr float XSPH_x_factor_mul = .75f;
-__global__ void __xsph_compute_x_factor(float3* x_factor, const SPH_variables* average, const uint* cell_bounds,
-	const particle_kinematics* kinematics, const particle* particles, const uint particle_capacity)
+__global__ void __compute_average_velocity(float3* averages, const SPH_variables* sph, const uint* cell_bounds, const particle_thermodynamics* thermodynamics,
+											const particle_kinematics* kinematics, const particle* particles, const uint particle_capacity)
+{
+	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
+	if (idx >= particle_capacity) { return; }
+	if (!particles[idx].exists()) { averages[idx] = make_float3(0.f); return; }
+
+	const float3 this_pos = particles[idx].true_pos();
+	const float this_radius_km = kinematics[idx].radius_km;
+
+	float3 average = make_float3(0.f);
+	morton_cell_iterator iter = morton_cell_iterator(particles[idx].morton_index());
+
+	FOREACH(uint, loop_morton, iter)
+		for (uint i = __read_start_idx(cell_bounds, loop_morton), end = __read_end_idx(cell_bounds, loop_morton); i < end; i++)
+		{
+			float3 displacement = this_pos - particles[i].true_pos();
+			const float sq_dst = dot(displacement, displacement);
+			if (sq_dst >= __sq_dist_cutoff) { continue; }
+			average += (___sph_kernel(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg) * (kinematics[i].velocity_kms - kinematics[idx].velocity_kms);
+		}
+	averages[idx] = average / sph[idx].avg_density_kgm3;
+}
+__global__ void __advect_with_average_velocities(const float3* averages, particle* particles, const uint particle_capacity, const float timestep_strength_product)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_capacity) { return; }
 
-	float3 x = make_float3(0.f);
-	if (particles[idx].exists()) {
-		const float3 this_pos = particles[idx].true_pos();
-		const float3 this_vel = kinematics[idx].velocity_kms;
-		const uint morton_index = particles[idx].morton_index();
-		const float this_radius_km = kinematics[idx].radius_km;
-		const float this_density = average[idx].avg_density_kgm3;
-
-		morton_cell_iterator iter = morton_cell_iterator(morton_index);
-
-		FOREACH(uint, loop_morton, iter)
-			for (uint i = __read_start_idx(cell_bounds, loop_morton), end = __read_end_idx(cell_bounds, loop_morton); i < end; i++)
-			{
-				float3 separation = particles[i].true_pos() - this_pos;
-				if (dot(separation, separation) >= __sq_dist_cutoff) { continue; }
-
-				x += (___sph_kernel(dot(separation, separation), this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg * 2.f / (this_density + average[i].avg_density_kgm3)) * (kinematics[i].velocity_kms - this_vel);
-			}
-	}
-	x_factor[idx] = x;
+	if (!particles[idx].exists()) { return; }
+	particles[idx].set_true_pos(particles[idx].true_pos() + averages[idx] * timestep_strength_product);
 }
-__global__ void __xsph_apply_x_factor(const float3* x_factor, particle_kinematics* kinematics, const uint particle_capacity, const float multiplier)
+void apply_smoothed_complete_timestep(smart_gpu_buffer<float3>& temporary, hydrogravitational_simulation& simulation, const float timestep, float recenter_strength = 1.f, float strength = 1.f)
 {
-	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
-	if (idx >= particle_capacity) { return; }
+	dim3 threads(simulation.particle_capacity > 512u ? 512u : simulation.particle_capacity);
+	dim3 blocks((uint)ceilf(simulation.particle_capacity / (float)threads.x));
 
-	kinematics[idx].velocity_kms += x_factor[idx] * multiplier;
-}
+	simulation.sort_spatially();
+	simulation.generate_gravitational_data();
+	simulation.apply_gravitation();
+	simulation.compute_sph_quantities();
+	
+	__compute_average_velocity<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.smoothed_particle_hydrodynamics.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr,
+		simulation.thermodynamic_data.buffer.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity);
 
-struct XSPH_variant
-{
-	smart_gpu_buffer<float3> x_factor;
-	XSPH_variant(uint allocation) : x_factor(allocation) {}
-
-	void apply_XSPH_variant(hydrodynamics_simulation& simulation, const float timestep)
-	{
-		dim3 threads(simulation.particle_capacity > 512u ? 512u : simulation.particle_capacity);
-		dim3 blocks((uint)ceilf(simulation.particle_capacity / (float)threads.x));
-
-		simulation.sort_spatially();
-		simulation.compute_sph_quantities();
-		__xsph_compute_x_factor<<<blocks, threads>>>(x_factor.gpu_buffer_ptr, simulation.smoothed_particle_hydrodynamics.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr,
-			simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity);
-		__xsph_apply_x_factor<<<blocks, threads>>>(x_factor.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particle_capacity, XSPH_x_factor_mul);
-		simulation.apply_thermodynamic_timestep(timestep);
+	simulation.apply_thermodynamic_timestep(timestep);
+	
+	if (recenter_strength > 0.f)
+		simulation.apply_kinematics_recenter(timestep, recenter_strength);
+	else
 		simulation.apply_kinematics(timestep);
-		__xsph_apply_x_factor<<<blocks, threads>>>(x_factor.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particle_capacity, -XSPH_x_factor_mul);
-	}
-	void apply_XSPH_variant(hydrogravitational_simulation& simulation, const float timestep, float recenter_strength = 1.f)
-	{
-		dim3 threads(simulation.particle_capacity > 512u ? 512u : simulation.particle_capacity);
-		dim3 blocks((uint)ceilf(simulation.particle_capacity / (float)threads.x));
+	
+	__advect_with_average_velocities<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity, timestep * strength);
+}
 
-		simulation.sort_spatially();
-		simulation.generate_gravitational_data();
-		simulation.apply_gravitation();
-		simulation.compute_sph_quantities();
-		__xsph_compute_x_factor<<<blocks, threads>>>(x_factor.gpu_buffer_ptr, simulation.smoothed_particle_hydrodynamics.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr,
-			simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity);
-		__xsph_apply_x_factor<<<blocks, threads>>>(x_factor.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particle_capacity, XSPH_x_factor_mul);
-		simulation.apply_thermodynamic_timestep(timestep);
-		if (recenter_strength > 0.f)
-			simulation.apply_kinematics_recenter(timestep, recenter_strength);
-		else
-			simulation.apply_kinematics(timestep);
-		__xsph_apply_x_factor<<<blocks, threads>>>(x_factor.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particle_capacity, -XSPH_x_factor_mul);
-	}
-};
 
 
 struct initial_thermodynamic_object : initial_kinematic_object
