@@ -112,18 +112,21 @@ void run_sph_sim()
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6000.f }, 9.0477868e+13f, domain_size_km * make_float3(.18f, .5f, .5f), make_float3(0.f, 2.f, 0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6000.f }, 9.0477868e+13f, domain_size_km * make_float3(.82f, .5f, .5f), make_float3(0.f, 2.f, 0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.97E+15f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 2.1735626e+15f, domain_size_km * make_float3(.18f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 3u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 1.436755e+14f, domain_size_km * make_float3(.5f), make_float3(0.f), make_float3(0.f), 1.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.97E+15f, domain_size_km * make_float3(.82f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 1u));
         initialize_thermodynamic_objects(simulation, v);
 
         for (uint i = 0u; i < 6000; i++)
         {
             const long long now = clock.now().time_since_epoch().count();
             for (uint j = 0u; j < physics_substeps; j++)
-                simulation.apply_complete_timestep(major_timestep / physics_substeps, 0.0007f);
-            writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string((clock.now().time_since_epoch().count() - now) * 1000.0 / step_second) + " ms");
+                simulation.apply_complete_timestep(major_timestep / physics_substeps, 1.5e-4f);
+            double time = (clock.now().time_since_epoch().count() - now) * 1000.0 / step_second;
+            writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string(time) + " ms");
             save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
+            if (time < 15.f)
+                break;
         }
     }
 }

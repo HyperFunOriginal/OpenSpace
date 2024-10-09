@@ -288,7 +288,7 @@ struct initial_kinematic_object
 
 	initial_kinematic_object() {}
 
-	float volume_ratio() const {
+	float particle_assignment_weightage() const {
 		float temp_var;
 		switch (geometry_type)
 		{
@@ -302,7 +302,7 @@ struct initial_kinematic_object
 			temp_var *= dimensions[2] / domain_size_km;
 			break;
 		}
-		return temp_var;
+		return expf(logf(temp_var) * .75f + logf(total_mass_Tg) * .25f);
 	}
 	initial_kinematic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
 		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f)) : 
@@ -328,19 +328,14 @@ std::vector<uint> find_apportionment_hamilton(const uint max_particles, const st
 
 	float total_volume = 0.f, total_mass = 0.f;
 	for (uint i = 0u; i < object_count; i++)
-		total_volume += objects[i].volume_ratio();
-
-	float avg_num_part_per_cell = max_particles / (total_volume * grid_cell_count);
-	if (avg_num_part_per_cell < 8.f)
-		writeline("Warning! Less than 8 particles per cell on average. Hydrodynamical simulations will fail.");
-	writeline("Average number of particles per cell: " + std::to_string(avg_num_part_per_cell));
+		total_volume += objects[i].particle_assignment_weightage();
 
 	uint used_count = 0u;
 	if (avg_vel != nullptr) { *avg_vel = make_float3(0.f); }
 	std::vector<float> truncation_error(object_count);
 	for (uint i = 0u; i < object_count; i++)
 	{
-		float target_particles = (float)max_particles * objects[i].volume_ratio() / total_volume;
+		float target_particles = (float)max_particles * objects[i].particle_assignment_weightage() / total_volume;
 		apportionment[i] = (uint)fmaxf(1.5f, target_particles);
 		truncation_error[i] = target_particles - apportionment[i];
 		used_count += apportionment[i];
@@ -375,7 +370,7 @@ std::vector<uint> find_apportionment_hamilton(const uint max_particles, const st
 			if (apportionment[i] <= 1)
 				continue;
 			float ratio = (float)apportionment[i] * total_volume /
-				((float)max_particles * objects[i].volume_ratio());
+				((float)max_particles * objects[i].particle_assignment_weightage());
 			if (ratio > max_apportionment)
 			{
 				max_apportionment = ratio;

@@ -86,6 +86,24 @@ __global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* ce
     }
     pixels[coords] = ___rgba(make_float4(pseudo_depth, pseudo_depth, pseudo_depth, 1.f));
 }
+/*__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
+{
+    const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
+    if (idx.x >= width || idx.y >= height)
+        return;
+
+    uint coords = idx.y * width + idx.x;
+    uint morton_index = __morton_index(make_float3(idx.x * domain_size_km / (float)width, idx.y * domain_size_km / (float)height, 0.f));
+    float render = 0.f;
+
+    for (uint i = morton_index; i < grid_cell_count; i = add_morton_indices(i, 4u))
+    {
+        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 5E+3f);
+        render = fmaxf(render, optical_thickness);
+    }
+    render = sqrtf(render);
+    pixels[coords] = ___rgba(make_float4(render, render, render, 1.f));
+}*/
 void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_simulation& simulation, const int width, const int height, const char* filename)
 {
     const dim3 threads(min(width, 16), min(height, 16));
@@ -93,6 +111,7 @@ void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_sim
     ___write_image_octree<<<blocks, threads>>>(temp.gpu_buffer_ptr, simulation.octree.gpu_buffer_ptr, width, height);
     temp.copy_to_cpu(); cuda_sync(); lodepng_encode32_file(filename, reinterpret_cast<const unsigned char*>(temp.cpu_buffer_ptr), width, height);
 }
+
 
 
 #endif
