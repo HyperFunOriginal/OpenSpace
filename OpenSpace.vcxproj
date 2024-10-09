@@ -85,16 +85,16 @@
     <CudaCompile Include="src\kernel.cu" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="src\CUDA_memory.h" />
-    <ClInclude Include="src\cum_sum.h" />
-    <ClInclude Include="src\gravitation.h" />
-    <ClInclude Include="src\helper_math.h" />
-    <ClInclude Include="src\hydrodynamics.h" />
+    <ClInclude Include="src\cuda_headers\CUDA_memory.h" />
+    <ClInclude Include="src\cuda_headers\cum_sum.h" />
+    <ClInclude Include="src\cuda_headers\gravitation.h" />
+    <ClInclude Include="src\cuda_headers\helper_math.h" />
+    <ClInclude Include="src\cuda_headers\hydrodynamics.h" />
     <ClInclude Include="src\lodepng.h" />
     <ClInclude Include="src\printstring_helper.h" />
-    <ClInclude Include="src\raymarch.h" />
-    <ClInclude Include="src\kinematics.h" />
-    <ClInclude Include="src\simulation_helper.h" />
+    <ClInclude Include="src\cuda_headers\raymarch.h" />
+    <ClInclude Include="src\cuda_headers\kinematics.h" />
+    <ClInclude Include="src\cuda_headers\simulation_helper.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\lodepng.cpp" />

@@ -68,7 +68,7 @@ inline __host__ __device__ float4 ___hue_svalue(float2 HsV)
 
 #include "gravitation.h"
 // Temporary debug view
-__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
+/*__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
 {
     const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
     if (idx.x >= width || idx.y >= height)
@@ -85,8 +85,8 @@ __global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* ce
         pseudo_depth = lerp(closeness, pseudo_depth, expf(-optical_thickness * size_grid_cell_km * 1E-2f));
     }
     pixels[coords] = ___rgba(make_float4(pseudo_depth, pseudo_depth, pseudo_depth, 1.f));
-}
-/*__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
+}*/
+__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
 {
     const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
     if (idx.x >= width || idx.y >= height)
@@ -98,12 +98,12 @@ __global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* ce
 
     for (uint i = morton_index; i < grid_cell_count; i = add_morton_indices(i, 4u))
     {
-        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 5E+3f);
+        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 1.5E+4f);
         render = fmaxf(render, optical_thickness);
     }
-    render = sqrtf(render);
+    render = cbrtf(render);
     pixels[coords] = ___rgba(make_float4(render, render, render, 1.f));
-}*/
+}
 void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_simulation& simulation, const int width, const int height, const char* filename)
 {
     const dim3 threads(min(width, 16), min(height, 16));

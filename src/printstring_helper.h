@@ -1,8 +1,7 @@
 #ifndef PRINT_HELP_H
 #define PRINT_HELP_H
 
-#include "cuda_runtime.h"
-#include "helper_math.h"
+#include "cuda_headers/helper_math.h"
 #include <string>
 
 inline float __correction(float t)

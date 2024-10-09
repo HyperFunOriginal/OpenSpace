@@ -1,7 +1,7 @@
 ﻿#include "printstring_helper.h"
-#include "gravitation.h"
-#include "hydrodynamics.h"
-#include "raymarch.h"
+#include "cuda_headers/gravitation.h"
+#include "cuda_headers/hydrodynamics.h"
+#include "cuda_headers/raymarch.h"
 
 #include <chrono>
 double one_second()
@@ -14,7 +14,7 @@ double one_second()
 
 // Tunable
 constexpr float major_timestep = 10.f;
-constexpr uint physics_substeps = 5u;
+constexpr uint physics_substeps = 8u;
 constexpr uint width  = 512u;
 constexpr uint height = 512u;
 
@@ -108,13 +108,14 @@ void run_sph_sim()
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
         double step_second = physics_substeps * one_second();
-        hydrogravitational_simulation simulation(1000000);
+        hydrogravitational_simulation simulation(5000000);
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 2.1735626e+15f, domain_size_km * make_float3(.18f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 3u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 1.436755e+14f, domain_size_km * make_float3(.5f), make_float3(0.f), make_float3(0.f), 1.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.97E+15f, domain_size_km * make_float3(.82f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 4500.f }, 3.93e+15f, domain_size_km * make_float3(.7f, .3f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 0u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.97E+15f, domain_size_km * make_float3(.3f, .7f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 1.43e+14f, domain_size_km * make_float3(.7f, .7f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 2.17e+15f, domain_size_km * make_float3(.3f, .3f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 3u));
         initialize_thermodynamic_objects(simulation, v);
 
         for (uint i = 0u; i < 6000; i++)

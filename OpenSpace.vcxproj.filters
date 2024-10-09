@@ -1,0 +1,42 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="src\kernel.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\lodepng.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\lodepng.h" />
+    <ClInclude Include="src\printstring_helper.h" />
+    <ClInclude Include="src\cuda_headers\simulation_helper.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\raymarch.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\kinematics.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\hydrodynamics.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\helper_math.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\gravitation.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\cum_sum.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cuda_headers\CUDA_memory.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="cuda_headers">
+      <UniqueIdentifier>{fd4edb58-6fbf-4866-981e-c5921f849c5b}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
