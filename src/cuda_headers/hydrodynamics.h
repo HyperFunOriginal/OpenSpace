@@ -72,10 +72,27 @@ struct SPH_variables
 __constant__ __device__ material_properties materials[max_material_count]; // Resides in constant memory. Needs to be sufficiently small.
 static_assert(sizeof(material_properties) * max_material_count < 4096u, "Constant memory insufficient!");
 
-inline __device__ __host__ float ___sph_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
+inline __device__ __host__ float ___gaussian_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
 {
-	this_radius_km = 0.5f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
+	this_radius_km = 2.f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
 	return expf(-sq_displacement_km2 / this_radius_km) * 0.17958712212f / (this_radius_km * sqrtf(this_radius_km));
+}
+inline __device__ __host__ float ___gaussian_kernel_grad_factor(float sq_displacement_km2, float this_radius_km, float other_radius_km)
+{
+	this_radius_km = 2.f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
+	return expf(-sq_displacement_km2 / this_radius_km) * 0.35917424424f / (this_radius_km * this_radius_km * sqrtf(this_radius_km));
+}
+inline __device__ __host__ float ___spline_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
+{
+	this_radius_km = 9.f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
+	sq_displacement_km2 /= this_radius_km; other_radius_km = sqrtf(sq_displacement_km2);
+	return fmaxf(0.f, 1.f - sq_displacement_km2 * (1.f - other_radius_km) * 5.f - sq_displacement_km2 * sq_displacement_km2 * other_radius_km) * 1.909859317f / (this_radius_km * sqrtf(this_radius_km));
+}
+inline __device__ __host__ float ___spline_kernel_grad_factor(float sq_displacement_km2, float this_radius_km, float other_radius_km)
+{
+	this_radius_km = 9.f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
+	sq_displacement_km2 /= this_radius_km; if (sq_displacement_km2 > 1.f) { return 0.f; } other_radius_km = sqrtf(sq_displacement_km2);
+	return (19.09859317f - other_radius_km * (28.64788976f - sq_displacement_km2 * 9.549296586f)) / (this_radius_km * this_radius_km * sqrtf(this_radius_km));
 }
 __device__ constexpr float __sq_dist_cutoff = sph_cutoff_radius * size_grid_cell_km * sph_cutoff_radius * size_grid_cell_km;
 
@@ -102,7 +119,7 @@ __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cel
 			if (dot(separation, separation) >= __sq_dist_cutoff) { continue; }
 
 			float radius_factor = kinematics[i].radius_km;
-			const float density_fraction = ___sph_kernel(dot(separation, separation), this_radius_km, radius_factor) * kinematics[i].mass_Tg;
+			const float density_fraction = ___spline_kernel(dot(separation, separation), this_radius_km, radius_factor) * kinematics[i].mass_Tg;
 			radius_factor *= radius_factor; radius_factor += this_radius_km * this_radius_km;
 			uint other_mat_idx = thermodynamics[i].material_index;
 
@@ -146,10 +163,10 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 			const float monaghan_viscosity_parameter = fmaxf(0.f, dot(relative_velocity, displacement)) * sqrtf(radius_factor) / (sq_dst + radius_factor * .01f);
 			const float other_density = average[i].avg_density_kgm3;
 
-			displacement *= ___sph_kernel(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg *
+			displacement *= ___spline_kernel_grad_factor(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg *
 			((average[i].pressure_GPa / (other_density * other_density) + this_data.pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f // pressure
 			+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_alpha + monaghan_viscosity_parameter * sph_monaghan_viscosity_beta)
-		    * (reference_speed_of_sound_kms * 2000.f) / (other_density + this_data.avg_density_kgm3)) / radius_factor; // artificial viscosity; needs factor of 1000 for units to work out
+		    * (reference_speed_of_sound_kms * 2000.f) / (other_density + this_data.avg_density_kgm3)); // artificial viscosity; needs factor of 1000 for units to work out
 			
 			hydrodynamic_acceleration_ms2 += displacement;
 			specific_internal_energy_change_TJTg += dot(displacement, relative_velocity);
@@ -278,7 +295,7 @@ __global__ void __compute_average_velocity(float3* averages, const SPH_variables
 			float3 displacement = this_pos - particles[i].true_pos();
 			const float sq_dst = dot(displacement, displacement);
 			if (sq_dst >= __sq_dist_cutoff) { continue; }
-			average += (___sph_kernel(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg) * (kinematics[i].velocity_kms - kinematics[idx].velocity_kms);
+			average += (___gaussian_kernel(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg) * (kinematics[i].velocity_kms - kinematics[idx].velocity_kms);
 		}
 	averages[idx] = average / sph[idx].avg_density_kgm3;
 }

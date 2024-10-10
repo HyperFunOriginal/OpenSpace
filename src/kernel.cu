@@ -14,7 +14,7 @@ double one_second()
 
 // Tunable
 constexpr float major_timestep = 10.f;
-constexpr uint physics_substeps = 8u;
+constexpr uint physics_substeps = 5u;
 constexpr uint width  = 512u;
 constexpr uint height = 512u;
 
@@ -108,7 +108,7 @@ void run_sph_sim()
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
         double step_second = physics_substeps * one_second();
-        hydrogravitational_simulation simulation(5000000);
+        hydrogravitational_simulation simulation(1000000);
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
