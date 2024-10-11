@@ -81,21 +81,29 @@ void init_materials(hydrodynamics_simulation& simulation)
     simulation.materials_cpu_copy.cpu_buffer_ptr[1].thermal_scale_K = 100.f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[1].stiffness_exponent = 4.6f;
 
-    // H2
-    simulation.materials_cpu_copy.cpu_buffer_ptr[2].bulk_modulus_GPa = .25f;
-    simulation.materials_cpu_copy.cpu_buffer_ptr[2].limiting_heat_capacity_kJkgK = 12.4f;
+    // Hydrogen
+    simulation.materials_cpu_copy.cpu_buffer_ptr[2].bulk_modulus_GPa = .193f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[2].limiting_heat_capacity_kJkgK = 10.14f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[2].standard_density_kgm3 = 86.f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[2].molar_mass_kgmol = 2E-3f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[2].thermal_scale_K = 40.f;
-    simulation.materials_cpu_copy.cpu_buffer_ptr[2].stiffness_exponent = 3.35f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[2].stiffness_exponent = 3.3f;
 
-    // H2O
+    // Water
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].bulk_modulus_GPa = 2.1f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].limiting_heat_capacity_kJkgK = 2.1f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].standard_density_kgm3 = 1000.f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].molar_mass_kgmol = 1.8E-2f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].thermal_scale_K = 50.f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].stiffness_exponent = 4.0f;
+
+    // Helium
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].bulk_modulus_GPa = .03f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].limiting_heat_capacity_kJkgK = 3.2f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].standard_density_kgm3 = 210.f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].molar_mass_kgmol = 4E-3f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].thermal_scale_K = 20.f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].stiffness_exponent = 4.f;
     simulation.copy_materials_to_gpu();
 }
 
@@ -112,21 +120,23 @@ void run_sph_sim()
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 4500.f }, 3.93e+15f, domain_size_km * make_float3(.7f, .3f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 0u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.97E+15f, domain_size_km * make_float3(.3f, .7f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 1.43e+14f, domain_size_km * make_float3(.7f, .7f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 2.17e+15f, domain_size_km * make_float3(.3f, .3f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 3u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.3E+15f, domain_size_km * make_float3(.25f, .25f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 8.1508597e+15f, domain_size_km * make_float3(.75f, .75f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 0u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 9000.f }, 3.6643537e+14f, domain_size_km * make_float3(.25f, .75f, .5f), make_float3(2.f, -2.f, 0.f), make_float3(0.f), 300.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 1.724106e+15f, domain_size_km * make_float3(.75f, .25f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 3u));
+        
         initialize_thermodynamic_objects(simulation, v);
 
+        float average_time = 0.f;
         for (uint i = 0u; i < 6000; i++)
         {
             const long long now = clock.now().time_since_epoch().count();
             for (uint j = 0u; j < physics_substeps; j++)
-                simulation.apply_complete_timestep(major_timestep / physics_substeps, 1.5e-4f);
-            double time = (clock.now().time_since_epoch().count() - now) * 1000.0 / step_second;
+                simulation.apply_complete_timestep(major_timestep / physics_substeps, 3e-4f);
+            double time = (clock.now().time_since_epoch().count() - now) * 1000.0 / step_second; average_time += time;
             writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string(time) + " ms");
             save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
-            if (time < 15.f)
+            if (i > 5u && time < average_time * .25f / i) // catch if something's gone off the rails
                 break;
         }
     }
