@@ -79,16 +79,6 @@ __constant__ __device__ material_properties materials[max_material_count]; // Re
 static_assert(sizeof(material_properties) * max_material_count < 4096u, "Constant memory insufficient!");
 
 __device__ constexpr float __sq_dist_cutoff = sph_cutoff_radius * size_grid_cell_km * sph_cutoff_radius * size_grid_cell_km;
-inline __device__ __host__ float ___gaussian_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
-{
-	this_radius_km = (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
-	return expf(-sq_displacement_km2 / this_radius_km) * 0.17958712212f / (this_radius_km * sqrtf(this_radius_km));
-}
-inline __device__ __host__ float ___gaussian_kernel_grad_factor(float sq_displacement_km2, float this_radius_km, float other_radius_km)
-{
-	this_radius_km = (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
-	return expf(-sq_displacement_km2 / this_radius_km) * 0.35917424424f / (this_radius_km * this_radius_km * sqrtf(this_radius_km));
-}
 inline __device__ __host__ float ___spline_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
 {
 	this_radius_km = 4.5f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
@@ -279,63 +269,6 @@ struct hydrogravitational_simulation : virtual public hydrodynamics_simulation, 
 		hydrodynamics_simulation::counting_sort_transfers(cell_bounds, targets);
 	}
 };
-
-
-
-__global__ void __compute_average_velocity(float3* averages, const SPH_variables* sph, const uint* cell_bounds, const particle_thermodynamics* thermodynamics,
-											const particle_kinematics* kinematics, const particle* particles, const uint particle_capacity)
-{
-	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
-	if (idx >= particle_capacity) { return; }
-	if (!particles[idx].exists()) { averages[idx] = make_float3(0.f); return; }
-
-	const float3 this_pos = particles[idx].true_pos();
-	const float this_radius_km = kinematics[idx].radius_km;
-
-	float3 average = make_float3(0.f);
-	morton_cell_iterator iter = morton_cell_iterator(particles[idx].morton_index());
-
-	FOREACH(uint, loop_morton, iter)
-		for (uint i = __read_start_idx(cell_bounds, loop_morton), end = __read_end_idx(cell_bounds, loop_morton); i < end; i++)
-		{
-			float3 displacement = this_pos - particles[i].true_pos();
-			const float sq_dst = dot(displacement, displacement);
-			if (sq_dst >= __sq_dist_cutoff) { continue; }
-			average += (___gaussian_kernel(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg) * (kinematics[i].velocity_kms - kinematics[idx].velocity_kms);
-		}
-	averages[idx] = average / sph[idx].avg_density_kgm3;
-}
-__global__ void __advect_with_average_velocities(const float3* averages, particle* particles, const uint particle_capacity, const float timestep_strength_product)
-{
-	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
-	if (idx >= particle_capacity) { return; }
-
-	if (!particles[idx].exists()) { return; }
-	particles[idx].set_true_pos(particles[idx].true_pos() + averages[idx] * timestep_strength_product);
-}
-void apply_smoothed_complete_timestep(smart_gpu_buffer<float3>& temporary, hydrogravitational_simulation& simulation, const float timestep, float recenter_strength = 1.f, float strength = 1.f)
-{
-	dim3 threads(simulation.particle_capacity > 512u ? 512u : simulation.particle_capacity);
-	dim3 blocks((uint)ceilf(simulation.particle_capacity / (float)threads.x));
-
-	simulation.sort_spatially();
-	simulation.generate_gravitational_data();
-	simulation.apply_gravitation();
-	simulation.compute_sph_quantities();
-	
-	__compute_average_velocity<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.smoothed_particle_hydrodynamics.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr,
-		simulation.thermodynamic_data.buffer.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity);
-
-	simulation.apply_thermodynamic_timestep(timestep);
-	
-	if (recenter_strength > 0.f)
-		simulation.apply_kinematics_recenter(timestep, recenter_strength);
-	else
-		simulation.apply_kinematics(timestep);
-	
-	__advect_with_average_velocities<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity, timestep * strength);
-}
-
 
 
 struct initial_thermodynamic_object : initial_kinematic_object

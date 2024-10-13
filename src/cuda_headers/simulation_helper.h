@@ -7,7 +7,7 @@
 // Tunable
 __device__ constexpr bool wrap_around = false;
 __device__ constexpr uint grid_dimension_pow = 7u; // Critical; Must be sufficiently large for moderate particle per cell counts. Must not be too large such that hydrodynamic averaging remains correct.
-__device__ constexpr float domain_size_km = 40000.f;
+__device__ constexpr float domain_size_km = 330000.f;
 __device__ constexpr uint minimum_depth = 1u; // Already optimal
 
 // Derived

@@ -1,6 +1,5 @@
 ﻿#include "printstring_helper.h"
-#include "cuda_headers/gravitation.h"
-#include "cuda_headers/hydrodynamics.h"
+#include "cuda_headers/hydrodynamics_helper.h"
 #include "cuda_headers/raymarch.h"
 
 #include <chrono>
@@ -117,13 +116,13 @@ void run_sph_sim()
 
         double step_second = physics_substeps * one_second();
         hydrogravitational_simulation simulation(1000000);
+        smart_gpu_buffer<float3> x_factor(simulation.particle_capacity);
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 5.3E+15f, domain_size_km * make_float3(.25f, .25f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6378.f }, 8.1508597e+15f, domain_size_km * make_float3(.75f, .75f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 0u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 9000.f }, 3.6643537e+14f, domain_size_km * make_float3(.25f, .75f, .5f), make_float3(2.f, -2.f, 0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 1.724106e+15f, domain_size_km * make_float3(.75f, .25f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 3u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 70000.f }, 1e+18f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.8f, .8f, .5f), make_float3(-8.f, 8.f, 0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.2f, .2f, .5f), make_float3(8.f, -8.f, 0.f), make_float3(0.f), 300.f, 1u));
         
         initialize_thermodynamic_objects(simulation, v);
 
@@ -132,7 +131,7 @@ void run_sph_sim()
         {
             const long long now = clock.now().time_since_epoch().count();
             for (uint j = 0u; j < physics_substeps; j++)
-                simulation.apply_complete_timestep(major_timestep / physics_substeps, 3e-4f);
+                apply_xsph_variant(x_factor, simulation, major_timestep / physics_substeps, 7e-4f);
             double time = (clock.now().time_since_epoch().count() - now) * 1000.0 / step_second; average_time += time;
             writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string(time) + " ms");
             save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());

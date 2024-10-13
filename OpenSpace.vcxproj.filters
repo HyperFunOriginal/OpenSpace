@@ -33,6 +33,9 @@
     <ClInclude Include="src\cuda_headers\CUDA_memory.h">
       <Filter>cuda_headers</Filter>
     </ClInclude>
+    <ClInclude Include="src\cuda_headers\hydrodynamics_helper.h">
+      <Filter>cuda_headers</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="cuda_headers">

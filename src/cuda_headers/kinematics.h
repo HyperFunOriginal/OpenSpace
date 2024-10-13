@@ -302,7 +302,7 @@ struct initial_kinematic_object
 			temp_var *= dimensions[2] / domain_size_km;
 			break;
 		}
-		return expf(logf(temp_var) * .75f + logf(total_mass_Tg) * .25f);
+		return expf(logf(temp_var) * .85f + logf(total_mass_Tg) * .15f);
 	}
 	initial_kinematic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
 		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f)) : 

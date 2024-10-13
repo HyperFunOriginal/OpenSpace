@@ -79,12 +79,14 @@
       <CodeGeneration>compute_75,sm_75</CodeGeneration>
       <AdditionalOptions>
       </AdditionalOptions>
+      <FastMath>false</FastMath>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="src\kernel.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\cuda_headers\hydrodynamics_helper.h" />
     <ClInclude Include="src\cuda_headers\CUDA_memory.h" />
     <ClInclude Include="src\cuda_headers\cum_sum.h" />
     <ClInclude Include="src\cuda_headers\gravitation.h" />

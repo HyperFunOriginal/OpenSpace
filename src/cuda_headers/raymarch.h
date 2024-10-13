@@ -67,26 +67,47 @@ inline __host__ __device__ float4 ___hue_svalue(float2 HsV)
 }
 
 #include "gravitation.h"
-// Temporary debug view
-//__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
-//{
-//    const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
-//    if (idx.x >= width || idx.y >= height)
-//        return;
-//
-//    uint coords = (height-idx.y-1u) * width + idx.x;
-//    uint morton_index = __morton_index(make_float3(idx.x * domain_size_km / (float)width, idx.y * domain_size_km / (float)height, 0.f));
-//    float pseudo_depth = 0.f;
-//
-//    for (uint i = morton_index, float closeness = .5f / grid_side_length; i < grid_cell_count; i = add_morton_indices(i, 4u), closeness += 1.f / grid_side_length)
-//    {
-//        float display_depth = 2.f * closeness - 1.f; display_depth *= 1.11803398875f * rsqrtf(1.f + display_depth * display_depth * 4.f); display_depth += .5f;
-//        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 4E+3f);
-//        pseudo_depth = lerp(closeness, pseudo_depth, expf(-optical_thickness * size_grid_cell_km * 1E-2f));
-//    }
-//    pixels[coords] = ___rgba(make_float4(pseudo_depth, pseudo_depth, pseudo_depth, 1.f));
-//}
-__global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
+ //Temporary debug view
+__global__ void ___write_image_octree_nebulous(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
+{
+    const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
+    if (idx.x >= width || idx.y >= height)
+        return;
+
+    uint coords = (height-idx.y-1u) * width + idx.x;
+    uint morton_index = __morton_index(make_float3(idx.x * domain_size_km / (float)width, idx.y * domain_size_km / (float)height, 0.f));
+    float pseudo_depth = 0.f;
+
+    for (uint i = morton_index, float closeness = .5f / grid_side_length; i < grid_cell_count; i = add_morton_indices(i, 4u), closeness += 1.f / grid_side_length)
+    {
+        float display_depth = 2.f * closeness - 1.f; display_depth *= 1.11803398875f * rsqrtf(1.f + display_depth * display_depth * 4.f); display_depth += .5f;
+        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 4E+3f);
+        pseudo_depth = lerp(closeness, pseudo_depth, expf(-optical_thickness * size_grid_cell_km * 1E-2f));
+    }
+    pixels[coords] = ___rgba(make_float4(pseudo_depth, pseudo_depth, pseudo_depth, 1.f));
+}
+__device__ float3 false_colour(float var)
+{
+    var *= 6.f; uint index = (uint)clamp(var, 0.f, 5.5f); var -= index;
+    switch (index)
+    {
+    case 0u:
+        return make_float3(sqrtf(fmaxf(0.f, var)), 0.f, 0.f);
+    case 1u:
+        return make_float3(1.f, var, 0.f);
+    case 2u:
+        return make_float3(1.f - var, 1.f, 0.f);
+    case 3u:
+        return make_float3(0.f, 1.f, var);
+    case 4u:
+        return make_float3(0.f, 1.f - var, 1.f);
+    case 5u:
+        var = 1.f - 1.f / (1.f + var);
+        return make_float3(var, var, 1.f);
+    }
+    return make_float3(1.f);
+}
+__global__ void ___write_image_octree_densities(uint* pixels, const grid_cell_ensemble* cells, const uint width, const uint height)
 {
     const uint2 idx = make_uint2(threadIdx + blockDim * blockIdx);
     if (idx.x >= width || idx.y >= height)
@@ -98,17 +119,16 @@ __global__ void ___write_image_octree(uint* pixels, const grid_cell_ensemble* ce
 
     for (uint i = morton_index; i < grid_cell_count; i = add_morton_indices(i, 4u))
     {
-        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 1.5E+4f);
+        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 1E+4f);
         render = fmaxf(render, optical_thickness);
     }
-    render = cbrtf(render);
-    pixels[coords] = ___rgba(make_float4(render, render, render, 1.f));
+    pixels[coords] = ___rgba(make_float4(false_colour(render), 1.f));
 }
 void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_simulation& simulation, const int width, const int height, const char* filename)
 {
     const dim3 threads(min(width, 16), min(height, 16));
     const dim3 blocks((uint)ceilf(width / (float)threads.x), (uint)ceilf(height / (float)threads.y));
-    ___write_image_octree<<<blocks, threads>>>(temp.gpu_buffer_ptr, simulation.octree.gpu_buffer_ptr, width, height);
+    ___write_image_octree_densities<<<blocks, threads>>>(temp.gpu_buffer_ptr, simulation.octree.gpu_buffer_ptr, width, height);
     temp.copy_to_cpu(); cuda_sync(); lodepng_encode32_file(filename, reinterpret_cast<const unsigned char*>(temp.cpu_buffer_ptr), width, height);
 }
 
