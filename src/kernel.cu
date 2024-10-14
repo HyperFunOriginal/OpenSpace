@@ -121,9 +121,9 @@ void run_sph_sim()
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
         v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 70000.f }, 1e+18f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.8f, .8f, .5f), make_float3(-8.f, 8.f, 0.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.2f, .2f, .5f), make_float3(8.f, -8.f, 0.f), make_float3(0.f), 300.f, 1u));
-        
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.8f, .8f, .5f), make_float3(-5.f, -5.f, 0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.2f, .2f, .5f), make_float3(5.f, 5.f, 0.f), make_float3(0.f), 300.f, 1u));
+
         initialize_thermodynamic_objects(simulation, v);
 
         float average_time = 0.f;

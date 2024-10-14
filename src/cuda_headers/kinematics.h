@@ -288,7 +288,7 @@ struct initial_kinematic_object
 
 	initial_kinematic_object() {}
 
-	float particle_assignment_weightage() const {
+	float volume() const {
 		float temp_var;
 		switch (geometry_type)
 		{
@@ -302,7 +302,10 @@ struct initial_kinematic_object
 			temp_var *= dimensions[2] / domain_size_km;
 			break;
 		}
-		return expf(logf(temp_var) * .85f + logf(total_mass_Tg) * .15f);
+		return temp_var;
+	}
+	float particle_assignment_weightage() const {
+		return expf(logf(volume()) * .85f + logf(total_mass_Tg) * .15f);
 	}
 	initial_kinematic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
 		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f)) : 

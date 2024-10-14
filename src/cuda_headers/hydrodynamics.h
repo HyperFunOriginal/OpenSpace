@@ -7,7 +7,11 @@ __device__ constexpr float sph_monaghan_viscosity_beta = 2.f;
 __device__ constexpr float sph_cutoff_radius = .9f; // needs to be sufficiently large for accurate averaging. Less than 1.5
 __device__ constexpr float ideal_gas_constant = 8.314f;
 __device__ constexpr uint max_material_count = 16u;
+
 __device__ constexpr float max_acceleration_factor_tick = 1E+5f; // Deletes particles with sudden accelerations too high to be reasonable.
+__device__ constexpr float standard_speed_of_sound_kms = 5.f; // Deletes particles with sudden accelerations too high to be reasonable.
+
+// must separate into thermal and bulk pressure.
 
 struct material_properties
 {
@@ -34,11 +38,16 @@ struct material_properties
 	__device__ __host__ float specific_entropy_TJKTg(float temperature_K) const {
 		return limiting_heat_capacity_kJkgK * (temperature_K / (thermal_scale_K + temperature_K) + logf((thermal_scale_K + temperature_K) / thermal_scale_K));
 	}
-	__device__ __host__ float EOS_pressure_GPa(float volume_fraction, float number_density, float temperature_K) const
+	__device__ __host__ float EOS_thermal_pressure_GPa(float volume_fraction, float number_density, float temperature_K) const
 	{
 		float temp = powf(volume_fraction, stiffness_exponent - 1.f);
 		number_density *= (fabsf(volume_fraction - 1.f) < 1E-4f) ? (stiffness_exponent - 1.f) : (temp - 1.f) / (volume_fraction - 1.f);
-		return fmaxf(0.f, bulk_modulus_GPa * (temp - volume_fraction) * volume_fraction / (stiffness_exponent - 2.f) + temperature_K * (ideal_gas_constant * 1E-9f) * number_density);
+		return temperature_K * (ideal_gas_constant * 1E-9f) * number_density;
+	}
+	__device__ __host__ float EOS_pressure_GPa(float volume_fraction, float number_density, float temperature_K) const
+	{
+		return fmaxf(0.f, bulk_modulus_GPa * (powf(volume_fraction, stiffness_exponent) - volume_fraction * volume_fraction) / (stiffness_exponent - 2.f)
+			+ EOS_thermal_pressure_GPa(volume_fraction, number_density, temperature_K));
 	}
 	__device__ __host__ float EOS_speed_of_sound_kms(float density, float volume_fraction, float number_density, float temperature_K) const
 	{
@@ -57,18 +66,18 @@ struct material_properties
 struct particle_thermodynamics
 {
 	uint material_index;
-	float specific_internal_energy_TJTg;
+	float specific_thermal_energy_TJTg;
 
-	__device__ __host__ particle_thermodynamics() : material_index(0u), specific_internal_energy_TJTg(150.f) {}
+	__device__ __host__ particle_thermodynamics() : material_index(0u), specific_thermal_energy_TJTg(150.f) {}
 };
 struct SPH_variables
 {
-	float pressure_GPa;
+	float total_pressure_GPa;
 	float avg_density_kgm3;
 	float density_change_rate;
-	float speed_of_sound;
+	float thermal_pressure_GPa;
 
-	__device__ __host__ SPH_variables() : pressure_GPa(), avg_density_kgm3() {}
+	__device__ __host__ SPH_variables() : total_pressure_GPa(), avg_density_kgm3() {}
 };
 
 /////////////////////////////////////////
@@ -125,10 +134,10 @@ __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cel
 		}
 
 	const uint material_idx = thermodynamics[idx].material_index;
-	const uint temperature = materials[material_idx].temperature_K(thermodynamics[idx].specific_internal_energy_TJTg);
+	const uint temperature = materials[material_idx].temperature_K(thermodynamics[idx].specific_thermal_energy_TJTg);
 	SPH_variables result; result.avg_density_kgm3 = average_density_kgm3; result.density_change_rate = density_rate_change_kgm3s;
-	result.pressure_GPa = materials[material_idx].EOS_pressure_GPa(average_volume_fraction, average_number_density_molm3, temperature);
-	result.speed_of_sound = materials[material_idx].EOS_speed_of_sound_kms(average_density_kgm3, average_volume_fraction, average_number_density_molm3, temperature);
+	result.thermal_pressure_GPa = materials[material_idx].EOS_thermal_pressure_GPa(average_volume_fraction, average_number_density_molm3, temperature); // This is without interparticle potentials.
+	result.total_pressure_GPa = materials[material_idx].EOS_pressure_GPa(average_volume_fraction, average_number_density_molm3, temperature);
 	average[idx] = result;
 }
 __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cell_bounds, particle_thermodynamics* thermodynamics,
@@ -156,20 +165,21 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 
 			const float3 relative_velocity = kinematics[i].velocity_kms - this_vel;
 			float radius_factor = kinematics[i].radius_km; radius_factor *= radius_factor; radius_factor += this_radius_km * this_radius_km;
-			const float monaghan_viscosity_parameter = fmaxf(0.f, dot(relative_velocity, displacement)) * sqrtf(radius_factor) / (sq_dst + radius_factor * .01f);
+			float monaghan_viscosity_parameter = fmaxf(0.f, dot(relative_velocity, displacement)) * sqrtf(radius_factor) / (sq_dst + radius_factor * .01f);
 			const float other_density = average[i].avg_density_kgm3;
 
-			displacement *= ___spline_kernel_grad_factor(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg *
-			((average[i].pressure_GPa / (other_density * other_density) + this_data.pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f // pressure
-			+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_alpha * (this_data.speed_of_sound + average[i].speed_of_sound) * 1000.f
-			+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_beta * 2000.f)) / (other_density + this_data.avg_density_kgm3)); // artificial viscosity; needs factor of 1000 for units to work out
+			displacement *= ___spline_kernel_grad_factor(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg;
+			monaghan_viscosity_parameter = monaghan_viscosity_parameter * (sph_monaghan_viscosity_alpha * standard_speed_of_sound_kms + monaghan_viscosity_parameter * sph_monaghan_viscosity_beta) * 2000.f / (other_density + this_data.avg_density_kgm3); // artificial viscosity; needs factor of 1000 for units to work out
 			
-			hydrodynamic_acceleration_ms2 += displacement;
-			specific_internal_energy_change_TJTg += dot(displacement, relative_velocity);
+			float thermal_pressure_mul = (average[i].thermal_pressure_GPa / (other_density * other_density) + this_data.thermal_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
+			float total_pressure_mul = (average[i].total_pressure_GPa / (other_density * other_density) + this_data.total_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
+
+			hydrodynamic_acceleration_ms2 += displacement * total_pressure_mul;
+			specific_internal_energy_change_TJTg += dot(displacement, relative_velocity) * thermal_pressure_mul; // discounts potential energy from interparticle potential.
 		}
 
 	kinematics[idx].acceleration_ms2 += hydrodynamic_acceleration_ms2;
-	thermodynamics[idx].specific_internal_energy_TJTg = fmaxf(thermodynamics[idx].specific_internal_energy_TJTg + .5f * specific_internal_energy_change_TJTg * timestep, .01f);
+	thermodynamics[idx].specific_thermal_energy_TJTg = fmaxf(thermodynamics[idx].specific_thermal_energy_TJTg + .5f * specific_internal_energy_change_TJTg * timestep, .01f);
 }
 __global__ void __step_particle_data(const SPH_variables* average, const particle_thermodynamics* thermodynamics, particle_kinematics* kinematics, particle* particles, const uint particle_capacity, const float timestep)
 {
@@ -218,7 +228,7 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 		particle_thermodynamics temp = particle_thermodynamics();
 		material_properties& properties = materials_cpu_copy.cpu_buffer_ptr[material_index];
 		if (properties.limiting_heat_capacity_kJkgK == 0.f || properties.molar_mass_kgmol == 0.f) { throw std::logic_error("Material Properties invalid."); }
-		temp.material_index = material_index; temp.specific_internal_energy_TJTg = fmaxf(0.01f, properties.specific_energy_TJTg(temperature_K));
+		temp.material_index = material_index; temp.specific_thermal_energy_TJTg = fmaxf(0.01f, properties.specific_energy_TJTg(temperature_K));
 		__init_thermodynamics<<<blocks, threads>>>(thermodynamic_data.buffer.gpu_buffer_ptr, start_index, number_of_particles, temp);
 	}
 	void copy_materials_to_gpu() const
