@@ -9,10 +9,9 @@ __device__ constexpr float ideal_gas_constant = 8.314f;
 __device__ constexpr uint max_material_count = 16u;
 
 __device__ constexpr float max_acceleration_factor_tick = 1E+5f; // Deletes particles with sudden accelerations too high to be reasonable.
-__device__ constexpr float standard_speed_of_sound_kms = 5.f; // Deletes particles with sudden accelerations too high to be reasonable.
+__device__ constexpr float standard_speed_of_sound_kms = 8.f; // Deletes particles with sudden accelerations too high to be reasonable.
 
-// must separate into thermal and bulk pressure.
-
+// Separate into thermal and bulk pressure.
 struct material_properties
 {
 	float limiting_heat_capacity_kJkgK;
@@ -73,10 +72,19 @@ struct particle_thermodynamics
 struct SPH_variables
 {
 	float total_pressure_GPa;
-	float avg_density_kgm3;
-	float density_change_rate;
 	float thermal_pressure_GPa;
+	float avg_density_kgm3;
+	float speed_of_sound_kms;
+	float density_change_rate;
 
+	__device__ __host__ SPH_variables(const material_properties& mat_properties, const float density, const float volume_fraction, const float number_density,
+	const float internal_energy, const float density_change_rate) : total_pressure_GPa(), thermal_pressure_GPa(), avg_density_kgm3(density), density_change_rate(density_change_rate), speed_of_sound_kms()
+	{
+		const float temperature = mat_properties.temperature_K(internal_energy);
+		thermal_pressure_GPa = mat_properties.EOS_thermal_pressure_GPa(volume_fraction, number_density, temperature); // This is without interparticle potentials.
+		total_pressure_GPa = mat_properties.EOS_pressure_GPa(volume_fraction, number_density, temperature);
+		speed_of_sound_kms = mat_properties.EOS_speed_of_sound_kms(density, volume_fraction, number_density, temperature);
+	}
 	__device__ __host__ SPH_variables() : total_pressure_GPa(), avg_density_kgm3() {}
 };
 
@@ -88,17 +96,20 @@ __constant__ __device__ material_properties materials[max_material_count]; // Re
 static_assert(sizeof(material_properties) * max_material_count < 4096u, "Constant memory insufficient!");
 
 __device__ constexpr float __sq_dist_cutoff = sph_cutoff_radius * size_grid_cell_km * sph_cutoff_radius * size_grid_cell_km;
-inline __device__ __host__ float ___spline_kernel(float sq_displacement_km2, float this_radius_km, float other_radius_km)
+inline __device__ __host__ float ___radius_factor(float this_radius, float other_radius)
 {
-	this_radius_km = 4.5f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
-	sq_displacement_km2 /= this_radius_km; other_radius_km = sqrtf(sq_displacement_km2);
-	return fmaxf(0.f, 1.f - sq_displacement_km2 * (1.f - other_radius_km) * 5.f - sq_displacement_km2 * sq_displacement_km2 * other_radius_km) * 1.909859317f / (this_radius_km * sqrtf(this_radius_km));
+	return fminf(this_radius * this_radius + other_radius * other_radius, __sq_dist_cutoff * 0.22222222222f);
 }
-inline __device__ __host__ float ___spline_kernel_grad_factor(float sq_displacement_km2, float this_radius_km, float other_radius_km)
+inline __device__ __host__ float ___spline_kernel(float sq_displacement_km2, float radius_factor)
 {
-	this_radius_km = 4.5f * (this_radius_km * this_radius_km + other_radius_km * other_radius_km);
-	sq_displacement_km2 /= this_radius_km; if (sq_displacement_km2 > 1.f) { return 0.f; } other_radius_km = sqrtf(sq_displacement_km2);
-	return (19.09859317f - other_radius_km * (28.64788976f - sq_displacement_km2 * 9.549296586f)) / (this_radius_km * this_radius_km * sqrtf(this_radius_km));
+	sq_displacement_km2 /= radius_factor * 4.5f; float displacement_factor = sqrtf(sq_displacement_km2);
+	return fmaxf(0.f, .2f - sq_displacement_km2 * (1.f - displacement_factor) - sq_displacement_km2 
+		* sq_displacement_km2 * displacement_factor * 0.2f) / (radius_factor * sqrtf(radius_factor));
+}
+inline __device__ __host__ float ___spline_kernel_grad_factor(float sq_displacement_km2, float radius_factor)
+{
+	sq_displacement_km2 /= radius_factor * 4.5f; if (sq_displacement_km2 > 1.f) { return 0.f; } float displacement_factor = sqrtf(sq_displacement_km2);
+	return (2.f - displacement_factor * (3.f - sq_displacement_km2)) * 0.22222222222f / (radius_factor * radius_factor * sqrtf(radius_factor));
 }
 
 __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cell_bounds, const particle_thermodynamics* thermodynamics, 
@@ -122,9 +133,8 @@ __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cel
 			float3 separation = particles[i].true_pos() - this_pos;
 			if (dot(separation, separation) >= __sq_dist_cutoff) { continue; }
 
-			float radius_factor = kinematics[i].radius_km;
-			const float density_fraction = ___spline_kernel(dot(separation, separation), this_radius_km, radius_factor) * kinematics[i].mass_Tg;
-			radius_factor *= radius_factor; radius_factor += this_radius_km * this_radius_km;
+			float radius_factor = ___radius_factor(kinematics[i].radius_km, this_radius_km);
+			const float density_fraction = ___spline_kernel(dot(separation, separation), radius_factor) * kinematics[i].mass_Tg;
 			uint other_mat_idx = thermodynamics[i].material_index;
 
 			average_density_kgm3 += density_fraction;
@@ -133,12 +143,8 @@ __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cel
 			density_rate_change_kgm3s += dot(separation, this_vel - kinematics[i].velocity_kms) * density_fraction / radius_factor;
 		}
 
-	const uint material_idx = thermodynamics[idx].material_index;
-	const uint temperature = materials[material_idx].temperature_K(thermodynamics[idx].specific_thermal_energy_TJTg);
-	SPH_variables result; result.avg_density_kgm3 = average_density_kgm3; result.density_change_rate = density_rate_change_kgm3s;
-	result.thermal_pressure_GPa = materials[material_idx].EOS_thermal_pressure_GPa(average_volume_fraction, average_number_density_molm3, temperature); // This is without interparticle potentials.
-	result.total_pressure_GPa = materials[material_idx].EOS_pressure_GPa(average_volume_fraction, average_number_density_molm3, temperature);
-	average[idx] = result;
+	average[idx] = SPH_variables(materials[thermodynamics[idx].material_index], average_density_kgm3, average_volume_fraction,
+		average_number_density_molm3, thermodynamics[idx].specific_thermal_energy_TJTg, density_rate_change_kgm3s);
 }
 __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cell_bounds, particle_thermodynamics* thermodynamics,
 									particle_kinematics* kinematics, particle* particles, const uint particle_capacity, const float timestep)
@@ -164,15 +170,18 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 			if (sq_dst >= __sq_dist_cutoff) { continue; }
 
 			const float3 relative_velocity = kinematics[i].velocity_kms - this_vel;
-			float radius_factor = kinematics[i].radius_km; radius_factor *= radius_factor; radius_factor += this_radius_km * this_radius_km;
+			float radius_factor = ___radius_factor(kinematics[i].radius_km, this_radius_km);
 			float monaghan_viscosity_parameter = fmaxf(0.f, dot(relative_velocity, displacement)) * sqrtf(radius_factor) / (sq_dst + radius_factor * .01f);
 			const float other_density = average[i].avg_density_kgm3;
 
-			displacement *= ___spline_kernel_grad_factor(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg;
-			monaghan_viscosity_parameter = monaghan_viscosity_parameter * (sph_monaghan_viscosity_alpha * standard_speed_of_sound_kms + monaghan_viscosity_parameter * sph_monaghan_viscosity_beta) * 2000.f / (other_density + this_data.avg_density_kgm3); // artificial viscosity; needs factor of 1000 for units to work out
+			displacement *= ___spline_kernel_grad_factor(sq_dst, radius_factor) * kinematics[i].mass_Tg;
+			monaghan_viscosity_parameter *= (sph_monaghan_viscosity_alpha * (this_data.speed_of_sound_kms + average[i].speed_of_sound_kms) * 1000.f 
+				+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_beta * 2000.f)) / (other_density + this_data.avg_density_kgm3); // artificial viscosity; needs factor of 1000 for units to work out
 			
-			float thermal_pressure_mul = (average[i].thermal_pressure_GPa / (other_density * other_density) + this_data.thermal_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
-			float total_pressure_mul = (average[i].total_pressure_GPa / (other_density * other_density) + this_data.total_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
+			float thermal_pressure_mul = (average[i].thermal_pressure_GPa / (other_density * other_density)
+				+ this_data.thermal_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
+			float total_pressure_mul = (average[i].total_pressure_GPa / (other_density * other_density) 
+				+ this_data.total_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
 
 			hydrodynamic_acceleration_ms2 += displacement * total_pressure_mul;
 			specific_internal_energy_change_TJTg += dot(displacement, relative_velocity) * thermal_pressure_mul; // discounts potential energy from interparticle potential.
@@ -191,7 +200,7 @@ __global__ void __step_particle_data(const SPH_variables* average, const particl
 	const float actual_density = average[idx].avg_density_kgm3;
 
 	const float factor = expf(-average[idx].density_change_rate * timestep * .33333333333f / actual_density);
-	kinematics[idx].multiply_radius(factor, minimum_radius_permissible, sph_cutoff_radius * size_grid_cell_km * .42f);
+	kinematics[idx].multiply_radius(factor, minimum_radius_permissible, sph_cutoff_radius * size_grid_cell_km * 0.47140452078f);
 	if (!(length(kinematics[idx].acceleration_ms2) * timestep * timestep < max_acceleration_factor_tick))
 		particles[idx].set_existence(false);
 }

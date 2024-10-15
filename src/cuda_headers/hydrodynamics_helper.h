@@ -27,7 +27,8 @@ __global__ void __compute_x_factor(float3* x_factor, const SPH_variables* sph, c
 			float3 displacement = this_pos - particles[i].true_pos();
 			const float sq_dst = dot(displacement, displacement);
 			if (sq_dst >= __sq_dist_cutoff) { continue; }
-			average += (___spline_kernel(sq_dst, this_radius_km, kinematics[i].radius_km) * kinematics[i].mass_Tg * 2.f / (this_dens + sph[idx].avg_density_kgm3)) * (kinematics[i].velocity_kms - this_vel_factor);
+			float radius_factor = ___radius_factor(kinematics[i].radius_km, this_radius_km);
+			average += (___spline_kernel(sq_dst, radius_factor) * kinematics[i].mass_Tg * 2.f / (this_dens + sph[idx].avg_density_kgm3)) * (kinematics[i].velocity_kms - this_vel_factor);
 		}
 	x_factor[idx] = average;
 }

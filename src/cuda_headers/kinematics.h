@@ -93,7 +93,7 @@ __global__ void __locate_in_cells(uint* cell_counts, particle* particles, uint n
 }
 
 template <class T>
-__global__ void __copy_spatial_counting_sort_data(const uint* cell_pos, const particle* target, const T* old_buffer, T* new_buffer, uint number_particles)
+__global__ void __copy_spatial_counting_sort_data(const uint* cell_pos, const particle* target, const T* __restrict__ old_buffer, T* __restrict__ new_buffer, uint number_particles)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= number_particles) { return; }
@@ -103,7 +103,7 @@ __global__ void __copy_spatial_counting_sort_data(const uint* cell_pos, const pa
 		new_buffer[__read_start_idx(cell_pos, part.morton_index()) + part.in_cell_index()] = old_buffer[idx];
 }
 
-__global__ void __copy_spatial_counting_sort(const uint* cell_pos, const particle* old_buffer, particle* new_buffer, uint number_particles)
+__global__ void __copy_spatial_counting_sort(const uint* cell_pos, const particle* __restrict__ old_buffer, particle* __restrict__ new_buffer, uint number_particles)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= number_particles) { return; }
@@ -126,7 +126,7 @@ void counting_sort_data_transfer(const smart_gpu_buffer<uint>& cell_bounds, cons
 ////   Geometry Initializers  ////
 //////////////////////////////////
 
-__global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float padding)
+__global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float speed_of_sound_kms)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_count) { return; }
@@ -144,7 +144,7 @@ __global__ void __init_sphere(particle* particles, const uint particle_count, co
 	particle to_set = particle();
 
 	to_set.set_existence(true);
-	to_set.set_true_pos(center + make_float3(cosf(t) * r, (ts * r) * lc + z * ls, z * lc - (ts * r) * ls) * (layer * .85f + padding) * particle_spacing);
+	to_set.set_true_pos(center + make_float3(cosf(t) * r, (ts * r) * lc + z * ls, z * lc - (ts * r) * ls) * (layer * .85f + speed_of_sound_kms) * particle_spacing);
 	particles[idx + offset] = to_set;
 }
 

@@ -119,7 +119,7 @@ void run_sph_sim()
         smart_gpu_buffer<float3> x_factor(simulation.particle_capacity);
         init_materials(simulation);
 
-        std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>();
+        std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>(); 
         v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 70000.f }, 1e+18f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 2u));
         v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.8f, .8f, .5f), make_float3(-5.f, -5.f, 0.f), make_float3(0.f), 300.f, 1u));
         v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.2f, .2f, .5f), make_float3(5.f, 5.f, 0.f), make_float3(0.f), 300.f, 1u));
@@ -132,6 +132,7 @@ void run_sph_sim()
             const long long now = clock.now().time_since_epoch().count();
             for (uint j = 0u; j < physics_substeps; j++)
                 apply_xsph_variant(x_factor, simulation, major_timestep / physics_substeps, 7e-4f);
+                //simulation.apply_complete_timestep(major_timestep / physics_substeps, 7e-4f);
             double time = (clock.now().time_since_epoch().count() - now) * 1000.0 / step_second; average_time += time;
             writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string(time) + " ms");
             save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
