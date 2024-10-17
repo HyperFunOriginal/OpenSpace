@@ -13,7 +13,7 @@ double one_second()
 
 // Tunable
 constexpr float major_timestep = 10.f;
-constexpr uint physics_substeps = 5u;
+constexpr uint physics_substeps = 4u;
 constexpr uint width  = 512u;
 constexpr uint height = 512u;
 
@@ -120,9 +120,10 @@ void run_sph_sim()
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>(); 
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 70000.f }, 1e+18f, domain_size_km * make_float3(.5f, .5f, .5f), make_float3(0.f, 0.f, 0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.8f, .8f, .5f), make_float3(-5.f, -5.f, 0.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 17000.f }, 1.6755161e+17f, domain_size_km * make_float3(.2f, .2f, .5f), make_float3(5.f, 5.f, 0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6400.f }, 6E+15f, domain_size_km * make_float3(.75f, .75f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 5400.f }, 6E+15f, domain_size_km * make_float3(.25f, .25f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 0u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 10000.f }, 8.3775804e+14f, domain_size_km * make_float3(.75f, .25f, .5f), make_float3(-1.f, 1.f, 0.f), make_float3(0.f), 300.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 2.8735101e+15f, domain_size_km * make_float3(.25f, .75f, .5f), make_float3(1.f, -1.f, 0.f), make_float3(0.f), 300.f, 3u));
 
         initialize_thermodynamic_objects(simulation, v);
 
@@ -131,8 +132,7 @@ void run_sph_sim()
         {
             const long long now = clock.now().time_since_epoch().count();
             for (uint j = 0u; j < physics_substeps; j++)
-                apply_xsph_variant(x_factor, simulation, major_timestep / physics_substeps, 7e-4f);
-                //simulation.apply_complete_timestep(major_timestep / physics_substeps, 7e-4f);
+                apply_xsph_variant(x_factor, simulation, major_timestep / physics_substeps, 5e-4f);
             double time = (clock.now().time_since_epoch().count() - now) * 1000.0 / step_second; average_time += time;
             writeline("Saving image " + std::to_string(i) + ", Time taken per substep: " + std::to_string(time) + " ms");
             save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());

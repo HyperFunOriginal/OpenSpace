@@ -62,7 +62,27 @@ void apply_xsph_variant(smart_gpu_buffer<float3>& temporary, hydrogravitational_
 
 	__apply_x_factor<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particle_capacity, -strength);
 }
+void apply_damping_stabilizer(smart_gpu_buffer<float3>& temporary, hydrogravitational_simulation& simulation, const float timestep, float recenter_strength = 1.f, float strength = 1.f)
+{
+	dim3 threads(simulation.particle_capacity > 512u ? 512u : simulation.particle_capacity);
+	dim3 blocks((uint)ceilf(simulation.particle_capacity / (float)threads.x));
 
+	simulation.sort_spatially();
+	simulation.generate_gravitational_data();
+	simulation.apply_gravitation();
+	simulation.compute_sph_quantities();
+
+	__compute_x_factor<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.smoothed_particle_hydrodynamics.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr,
+		simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr, simulation.particle_capacity);
+	__apply_x_factor<<<blocks, threads>>>(temporary.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particle_capacity, strength);
+
+	simulation.apply_thermodynamic_timestep(timestep, false);
+
+	if (recenter_strength > 0.f)
+		simulation.apply_kinematics_recenter(timestep, recenter_strength);
+	else
+		simulation.apply_kinematics(timestep);
+}
 
 
 #endif

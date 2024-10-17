@@ -2,14 +2,12 @@
 #define HYDRODYNAMICS_H
 #include "gravitation.h"
 
-__device__ constexpr float sph_monaghan_viscosity_alpha = 1.f;
+__device__ constexpr float sph_monaghan_viscosity_alpha = .5f;
 __device__ constexpr float sph_monaghan_viscosity_beta = 2.f;
 __device__ constexpr float sph_cutoff_radius = .9f; // needs to be sufficiently large for accurate averaging. Less than 1.5
 __device__ constexpr float ideal_gas_constant = 8.314f;
 __device__ constexpr uint max_material_count = 16u;
-
 __device__ constexpr float max_acceleration_factor_tick = 1E+5f; // Deletes particles with sudden accelerations too high to be reasonable.
-__device__ constexpr float standard_speed_of_sound_kms = 8.f; // Deletes particles with sudden accelerations too high to be reasonable.
 
 // Separate into thermal and bulk pressure.
 struct material_properties
@@ -103,7 +101,7 @@ inline __device__ __host__ float ___radius_factor(float this_radius, float other
 inline __device__ __host__ float ___spline_kernel(float sq_displacement_km2, float radius_factor)
 {
 	sq_displacement_km2 /= radius_factor * 4.5f; float displacement_factor = sqrtf(sq_displacement_km2);
-	return fmaxf(0.f, .2f - sq_displacement_km2 * (1.f - displacement_factor) - sq_displacement_km2 
+	return fmaxf(0.f, .2f - sq_displacement_km2 * (1.f - displacement_factor) - sq_displacement_km2
 		* sq_displacement_km2 * displacement_factor * 0.2f) / (radius_factor * sqrtf(radius_factor));
 }
 inline __device__ __host__ float ___spline_kernel_grad_factor(float sq_displacement_km2, float radius_factor)
@@ -171,7 +169,7 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 
 			const float3 relative_velocity = kinematics[i].velocity_kms - this_vel;
 			float radius_factor = ___radius_factor(kinematics[i].radius_km, this_radius_km);
-			float monaghan_viscosity_parameter = fmaxf(0.f, dot(relative_velocity, displacement)) * sqrtf(radius_factor) / (sq_dst + radius_factor * .01f);
+			float monaghan_viscosity_parameter = fmaxf(0.f, dot(relative_velocity, displacement)) * sqrtf(radius_factor) / (sq_dst + radius_factor * .0001f);
 			const float other_density = average[i].avg_density_kgm3;
 
 			displacement *= ___spline_kernel_grad_factor(sq_dst, radius_factor) * kinematics[i].mass_Tg;
@@ -251,13 +249,13 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 		__average_SPH_quantities<<<blocks, threads>>>(smoothed_particle_hydrodynamics.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, 
 			thermodynamic_data.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity);
 	}
-	void apply_thermodynamic_timestep(const float timestep)
+	void apply_thermodynamic_timestep(const float timestep, bool apply_heat = true)
 	{
 		dim3 threads(particle_capacity > 512u ? 512u : particle_capacity);
 		dim3 blocks((uint)ceilf(particle_capacity / (float)threads.x));
 		
 		__apply_SPH_forces<<<blocks, threads>>>(smoothed_particle_hydrodynamics.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr,
-			thermodynamic_data.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity, timestep);
+			thermodynamic_data.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity, timestep * apply_heat);
 
 		__step_particle_data<<<blocks, threads>>>(smoothed_particle_hydrodynamics.gpu_buffer_ptr, thermodynamic_data.buffer.gpu_buffer_ptr, 
 												  kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity, timestep);

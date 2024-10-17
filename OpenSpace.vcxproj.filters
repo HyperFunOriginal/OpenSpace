@@ -27,7 +27,7 @@
     <ClInclude Include="src\cuda_headers\gravitation.h">
       <Filter>cuda_headers</Filter>
     </ClInclude>
-    <ClInclude Include="src\cuda_headers\cum_sum.h">
+    <ClInclude Include="src\cuda_headers\parallel.h">
       <Filter>cuda_headers</Filter>
     </ClInclude>
     <ClInclude Include="src\cuda_headers\CUDA_memory.h">

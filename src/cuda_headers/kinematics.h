@@ -1,7 +1,7 @@
 #ifndef KINEMATICS_H
 #define KINEMATICS_H
 #include "simulation_helper.h"
-#include "cum_sum.h"
+#include "parallel.h"
 
 struct particle
 {

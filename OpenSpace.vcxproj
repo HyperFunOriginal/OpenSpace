@@ -88,7 +88,7 @@
   <ItemGroup>
     <ClInclude Include="src\cuda_headers\hydrodynamics_helper.h" />
     <ClInclude Include="src\cuda_headers\CUDA_memory.h" />
-    <ClInclude Include="src\cuda_headers\cum_sum.h" />
+    <ClInclude Include="src\cuda_headers\parallel.h" />
     <ClInclude Include="src\cuda_headers\gravitation.h" />
     <ClInclude Include="src\cuda_headers\helper_math.h" />
     <ClInclude Include="src\cuda_headers\hydrodynamics.h" />
