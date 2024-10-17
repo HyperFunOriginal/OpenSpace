@@ -13,7 +13,7 @@ double one_second()
 
 // Tunable
 constexpr float major_timestep = 10.f;
-constexpr uint physics_substeps = 4u;
+constexpr uint physics_substeps = 5u;
 constexpr uint width  = 512u;
 constexpr uint height = 512u;
 
@@ -35,7 +35,6 @@ void run_grav_sim()
     if (create_folder("SaveFolder"))
     {
         std::chrono::steady_clock clock;
-        rng_state state(clock.now().time_since_epoch().count() >> 12u);
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
         uint particle_count = obtain_particle_count();
@@ -86,7 +85,7 @@ void init_materials(hydrodynamics_simulation& simulation)
     simulation.materials_cpu_copy.cpu_buffer_ptr[2].standard_density_kgm3 = 86.f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[2].molar_mass_kgmol = 2E-3f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[2].thermal_scale_K = 40.f;
-    simulation.materials_cpu_copy.cpu_buffer_ptr[2].stiffness_exponent = 3.3f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[2].stiffness_exponent = 3.1f;
 
     // Water
     simulation.materials_cpu_copy.cpu_buffer_ptr[3].bulk_modulus_GPa = 2.1f;
@@ -102,7 +101,7 @@ void init_materials(hydrodynamics_simulation& simulation)
     simulation.materials_cpu_copy.cpu_buffer_ptr[4].standard_density_kgm3 = 210.f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[4].molar_mass_kgmol = 4E-3f;
     simulation.materials_cpu_copy.cpu_buffer_ptr[4].thermal_scale_K = 20.f;
-    simulation.materials_cpu_copy.cpu_buffer_ptr[4].stiffness_exponent = 4.f;
+    simulation.materials_cpu_copy.cpu_buffer_ptr[4].stiffness_exponent = 3.9f;
     simulation.copy_materials_to_gpu();
 }
 
@@ -111,7 +110,6 @@ void run_sph_sim()
     if (create_folder("SaveFolder"))
     {
         std::chrono::steady_clock clock;
-        rng_state state(clock.now().time_since_epoch().count() >> 12u);
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
         double step_second = physics_substeps * one_second();
@@ -120,10 +118,8 @@ void run_sph_sim()
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>(); 
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6400.f }, 6E+15f, domain_size_km * make_float3(.75f, .75f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 5400.f }, 6E+15f, domain_size_km * make_float3(.25f, .25f, .5f), make_float3(0.f), make_float3(0.f), 300.f, 0u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 10000.f }, 8.3775804e+14f, domain_size_km * make_float3(.75f, .25f, .5f), make_float3(-1.f, 1.f, 0.f), make_float3(0.f), 300.f, 2u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 7000.f }, 2.8735101e+15f, domain_size_km * make_float3(.25f, .75f, .5f), make_float3(1.f, -1.f, 0.f), make_float3(0.f), 300.f, 3u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 70000.f }, 1.5e+18f, domain_size_km * make_float3(.6f, .6f, .5f), make_float3(-2.f, 2.f, 0.f), make_float3(0.f), 300.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 40000.f }, 5e+17f, domain_size_km * make_float3(.35f, .35f, .5f), make_float3(6.f, -6.f, 0.f), make_float3(0.f), 300.f, 4u));
 
         initialize_thermodynamic_objects(simulation, v);
 
