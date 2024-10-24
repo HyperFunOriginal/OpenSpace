@@ -6,7 +6,7 @@
 __device__ constexpr bool compute_fast_approx = true;
 __device__ constexpr bool compute_gravity_empty_cell = false;
 __device__ constexpr float barnes_hut_criterion = 0.35f;
-__device__ constexpr float G_in_Tg_km_units = 6.6743015E-8f;
+__device__ constexpr float G_km2_m_s2_Tg = 6.6743015E-8f;
 
 struct grid_cell_ensemble
 {
@@ -127,7 +127,7 @@ __global__ void __compute_barnes_hut(grid_cell_ensemble* octree, const uint* cel
 				morton_index <<= 3u;
 				continue;
 			}
-			acceleration_ms2 += separation * (other_c.total_mass_Tg * G_in_Tg_km_units *
+			acceleration_ms2 += separation * (other_c.total_mass_Tg * G_km2_m_s2_Tg *
 				(compute_fast_approx ? grav_acc_factor_fast(length(separation) + 1E-10f, other_c.standard_radius_km + 1E-10f) : grav_acc_factor(length(separation) + 1E-10f, other_c.standard_radius_km + 1E-10f)));
 			if ((morton_index & 7u) == 7u && depth > 0)
 			{
@@ -153,7 +153,7 @@ __global__ void __apply_gravitation(const grid_cell_ensemble* octree, const uint
 	{
 		if (i == idx) { continue; }
 		float3 separation = make_float3(this_pos - make_int3(particles[i].position >> 1u)) * (domain_size_km / 2147483648.f); // greater precision in int than float; 31 bits vs 23 bits
-		acceleration_ms2 += separation * (kinematics[i].mass_Tg * G_in_Tg_km_units *
+		acceleration_ms2 += separation * (kinematics[i].mass_Tg * G_km2_m_s2_Tg *
 			(compute_fast_approx ? grav_acc_factor_fast(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f) : grav_acc_factor(length(separation) + 1E-10f, kinematics[i].radius_km + 1E-10f)));
 	}
 

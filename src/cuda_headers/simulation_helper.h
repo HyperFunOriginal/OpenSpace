@@ -6,8 +6,8 @@
 
 // Tunable
 __device__ constexpr bool wrap_around = false;
-__device__ constexpr uint grid_dimension_pow = 7u; // Critical; Must be sufficiently large for moderate particle per cell counts. Must not be too large such that hydrodynamic averaging remains correct.
-__device__ constexpr float domain_size_km = 330000.f;
+__device__ constexpr uint grid_dimension_pow = 8u; // Critical; Must be sufficiently large for moderate particle per cell counts. Must not be too large such that hydrodynamic averaging remains correct.
+__device__ constexpr float domain_size_km = 34000.f;
 __device__ constexpr uint minimum_depth = 1u; // Already optimal
 
 // Derived
@@ -84,7 +84,6 @@ __device__ __host__ uint add_morton_indices(uint morton_A, uint morton_B)
 /// <returns></returns>
 __device__ __host__ uint bounds(uint morton, uint depth)
 {
-	morton >>= 3u * (grid_dimension_pow - depth);
 	uint result = ((morton & mask_morton_x) == 0) | (((morton & mask_morton_y) == 0) << 1u) | (((morton & mask_morton_z) == 0) << 2u);
 	morton ^= (~0u) >> (32u - depth * 3u);
 	return (result << 3u) | ((morton & mask_morton_x) == 0) | (((morton & mask_morton_y) == 0) << 1u) | (((morton & mask_morton_z) == 0) << 2u);
@@ -172,11 +171,15 @@ struct morton_cell_iterator
 			| (___morton_offsets[(current_idx / 3u) % 3u] << 1u)
 			| (___morton_offsets[current_idx / 9u] << 2u));
 	}
+	__device__ __host__ void exclude_center()
+	{
+		bitmask &= ~8192u;
+	}
 	__device__ __host__ morton_cell_iterator() : bitmask(), morton() {}
-	__device__ __host__ morton_cell_iterator(uint center_morton_idx) : bitmask(0x07ffffffu), morton(center_morton_idx)
+	__device__ __host__ morton_cell_iterator(uint center_morton_idx, uint depth = grid_dimension_pow) : bitmask(0x07ffffffu), morton(center_morton_idx)
 	{
 		morton = sub_morton_indices(center_morton_idx, 7u);
-		uint temp = bounds(center_morton_idx, grid_dimension_pow);
+		uint temp = bounds(center_morton_idx, depth);
 #pragma unroll
 		for (uint i = 0; i < 6; i++)
 			bitmask &= ~(___bitmasks_iterator[i] * ((temp & (1u << i)) != 0u));

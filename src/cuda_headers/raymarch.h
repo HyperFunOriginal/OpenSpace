@@ -102,7 +102,7 @@ __global__ void ___write_image_octree_nebulous(uint* pixels, const grid_cell_ens
     for (uint i = morton_index, float closeness = .5f / grid_side_length; i < grid_cell_count; i = add_morton_indices(i, 4u), closeness += 1.f / grid_side_length)
     {
         float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 1E+4f);
-        colour = lerp(false_colour(closeness) * sqrtf(closeness), colour, expf(-optical_thickness * size_grid_cell_km * 1E-2f));
+        colour = lerp((false_colour(closeness) * .5f + .5f) * sqrtf(closeness), colour, expf(-optical_thickness * size_grid_cell_km * 1E-2f));
     }
     pixels[coords] = ___rgba(make_float4(colour, 1.f));
 }
@@ -127,7 +127,7 @@ void save_octree_image(smart_gpu_cpu_buffer<uint>& temp, const gravitational_sim
 {
     const dim3 threads(min(width, 16), min(height, 16));
     const dim3 blocks((uint)ceilf(width / (float)threads.x), (uint)ceilf(height / (float)threads.y));
-    ___write_image_octree_densities<<<blocks, threads>>>(temp.gpu_buffer_ptr, simulation.octree.gpu_buffer_ptr, width, height);
+    ___write_image_octree_nebulous<<<blocks, threads>>>(temp.gpu_buffer_ptr, simulation.octree.gpu_buffer_ptr, width, height);
     temp.copy_to_cpu(); cuda_sync(); lodepng_encode32_file(filename, reinterpret_cast<const unsigned char*>(temp.cpu_buffer_ptr), width, height);
 }
 

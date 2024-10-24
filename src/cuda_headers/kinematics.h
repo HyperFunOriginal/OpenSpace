@@ -29,12 +29,13 @@ struct particle
 	{
 		return make_float3(position) * (domain_size_km / 4294967295.f);
 	}
+	// Special behaviours: Setting out of bounds either results in wrap around or deletion depending on settings. Setting to nonfinite values result in deletion.
 	__device__ __host__ void set_true_pos(float3 pos)
 	{
 		pos /= domain_size_km;
 		if (wrap_around)
 			pos -= floorf(pos);
-		if (fminf(global_min(pos), 0.999999940395355224609375f - global_max(pos)) < 0.f)
+		if (!(fminf(global_min(pos), 0.999999940395355224609375f - global_max(pos)) > 0.f))
 			cell_and_existence = 0u;
 		else
 			position = make_uint3(pos * 4294967296.f);
@@ -185,7 +186,7 @@ __global__ void __init_kinematics(const particle* particles, particle_kinematics
 	kinematics_to_set.velocity_kms = velocity + tangential_vel;
 	kinematics[idx + offset] = kinematics_to_set;
 }
-
+// One may exploit setting acceleration to be NaN or Infinity to prune particles
 __global__ void __apply_kinematics(particle* particles, particle_kinematics* kinematics, const float timestep_s, const uint particle_capacity, const float3 subtract_offset)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;

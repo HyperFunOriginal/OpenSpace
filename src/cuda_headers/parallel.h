@@ -81,87 +81,153 @@ void apply_incl_cum_sum(smart_gpu_buffer<T>& data)
 
 
 template <class T>
-__device__ __host__ T maximum_unified(T a, T b); // must be defined for your use case
+inline __device__ __host__ T maximum_unified(T a, T b); // must be defined for your use case
+
+template <class T>
+inline __device__ __host__ T minimum_value_format(); // must be defined for your use case
 
 template<>
-__device__ __host__ uint maximum_unified(uint a, uint b)
+inline __device__ __host__ uint maximum_unified(uint a, uint b)
 {
 	return max(a, b);
 }
 template<>
-__device__ __host__ uint2 maximum_unified(uint2 a, uint2 b)
+inline __device__ __host__ uint2 maximum_unified(uint2 a, uint2 b)
 {
 	return max(a, b);
 }
 template<>
-__device__ __host__ uint3 maximum_unified(uint3 a, uint3 b)
+inline __device__ __host__ uint3 maximum_unified(uint3 a, uint3 b)
 {
 	return max(a, b);
 }
 template<>
-__device__ __host__ uint4 maximum_unified(uint4 a, uint4 b)
-{
-	return max(a, b);
-}
-
-template<>
-__device__ __host__ int maximum_unified(int a, int b)
-{
-	return max(a, b);
-}
-template<>
-__device__ __host__ int2 maximum_unified(int2 a, int2 b)
-{
-	return max(a, b);
-}
-template<>
-__device__ __host__ int3 maximum_unified(int3 a, int3 b)
-{
-	return max(a, b);
-}
-template<>
-__device__ __host__ int4 maximum_unified(int4 a, int4 b)
+inline __device__ __host__ uint4 maximum_unified(uint4 a, uint4 b)
 {
 	return max(a, b);
 }
 
 template<>
-__device__ __host__ float maximum_unified(float a, float b)
+inline __device__ __host__ uint minimum_value_format()
+{
+	return 0u;
+}
+template<>
+inline __device__ __host__ uint2 minimum_value_format()
+{
+	return make_uint2(0u);
+}
+template<>
+inline __device__ __host__ uint3 minimum_value_format()
+{
+	return make_uint3(0u);
+}
+template<>
+inline __device__ __host__ uint4 minimum_value_format()
+{
+	return make_uint4(0u);
+}
+
+template<>
+inline __device__ __host__ int maximum_unified(int a, int b)
+{
+	return max(a, b);
+}
+template<>
+inline __device__ __host__ int2 maximum_unified(int2 a, int2 b)
+{
+	return max(a, b);
+}
+template<>
+inline __device__ __host__ int3 maximum_unified(int3 a, int3 b)
+{
+	return max(a, b);
+}
+template<>
+inline __device__ __host__ int4 maximum_unified(int4 a, int4 b)
+{
+	return max(a, b);
+}
+
+template<>
+inline __device__ __host__ int minimum_value_format()
+{
+	return (1<<31);
+}
+template<>
+inline __device__ __host__ int2 minimum_value_format()
+{
+	return make_int2(1 << 31);
+}
+template<>
+inline __device__ __host__ int3 minimum_value_format()
+{
+	return make_int3(1 << 31);
+}
+template<>
+inline __device__ __host__ int4 minimum_value_format()
+{
+	return make_int4(1 << 31);
+}
+
+template<>
+inline __device__ __host__ float maximum_unified(float a, float b)
 {
 	return fmaxf(a, b);
 }
 template<>
-__device__ __host__ float2 maximum_unified(float2 a, float2 b)
+inline __device__ __host__ float2 maximum_unified(float2 a, float2 b)
 {
 	return fmaxf(a, b);
 }
 template<>
-__device__ __host__ float3 maximum_unified(float3 a, float3 b)
+inline __device__ __host__ float3 maximum_unified(float3 a, float3 b)
 {
 	return fmaxf(a, b);
 }
 template<>
-__device__ __host__ float4 maximum_unified(float4 a, float4 b)
+inline __device__ __host__ float4 maximum_unified(float4 a, float4 b)
 {
 	return fmaxf(a, b);
+}
+
+template<>
+inline __device__ __host__ float minimum_value_format()
+{
+	return -INFINITY;
+}
+template<>
+inline __device__ __host__ float2 minimum_value_format()
+{
+	return make_float2(-INFINITY);
+}
+template<>
+inline __device__ __host__ float3 minimum_value_format()
+{
+	return make_float3(-INFINITY);
+}
+template<>
+inline __device__ __host__ float4 minimum_value_format()
+{
+	return make_float4(-INFINITY);
 }
 
 template <class T>
 __global__ void ____maximum_reduce(T* data, uint length, uint stride)
 {
 	__shared__ T shared[____block_size_cumsum]; uint internal_idx = threadIdx.x;
-	uint grid_idx = (threadIdx.x + ____block_size_cumsum * blockIdx.x + 1u) * stride - 1u;
-	shared[internal_idx] = (grid_idx < length) ? data[grid_idx] : T();
+	uint grid_idx = (threadIdx.x + ____block_size_cumsum * blockIdx.x) * stride;
+	shared[internal_idx] = (grid_idx < length) ? data[grid_idx] : minimum_value_format<T>();
 
 	for (uint i = 0u; i < ____block_pow_cumsum; i++)
 	{
-		internal_idx = (internal_idx << 1u) + 1u;
+		internal_idx <<= 1u;
 		__syncthreads();
 		if (internal_idx < ____block_size_cumsum)
-			shared[internal_idx] = maximum_unified<T>(shared[internal_idx], shared[internal_idx - (1u << i)]);
+			shared[internal_idx] = maximum_unified<T>(shared[internal_idx], shared[internal_idx + (1u << i)]);
 		__syncthreads();
 	}
-	if (grid_idx < length && (threadIdx.x + 1u) == ____block_size_cumsum)
+	if (grid_idx < length && threadIdx.x == 0u)
 		data[grid_idx] = shared[threadIdx.x];
 }
 /// <summary>
@@ -180,92 +246,158 @@ T find_maximum_val(smart_gpu_buffer<T>& data)
 		____maximum_reduce<<<blocks, ____block_size_cumsum>>>(data.gpu_buffer_ptr, data.dedicated_len, stride);
 		stride <<= ____block_pow_cumsum; 
 	}
-	T result; cudaMemcpy(&result, data.gpu_buffer_ptr + (data.dedicated_len - 1u), sizeof(T), cudaMemcpyDeviceToHost);
+	T result; cudaMemcpy(&result, data.gpu_buffer_ptr, sizeof(T), cudaMemcpyDeviceToHost);
 	return result;
 }
 
 template <class T>
-__device__ __host__ T minimum_unified(T a, T b); // must be defined for your use case
+inline __device__ __host__ T minimum_unified(T a, T b); // must be defined for your use case
+
+template <class T>
+inline __device__ __host__ T maximum_value_format(); // must be defined for your use case
 
 template<>
-__device__ __host__ uint minimum_unified(uint a, uint b)
+inline __device__ __host__ uint minimum_unified(uint a, uint b)
 {
 	return min(a, b);
 }
 template<>
-__device__ __host__ uint2 minimum_unified(uint2 a, uint2 b)
+inline __device__ __host__ uint2 minimum_unified(uint2 a, uint2 b)
 {
 	return min(a, b);
 }
 template<>
-__device__ __host__ uint3 minimum_unified(uint3 a, uint3 b)
+inline __device__ __host__ uint3 minimum_unified(uint3 a, uint3 b)
 {
 	return min(a, b);
 }
 template<>
-__device__ __host__ uint4 minimum_unified(uint4 a, uint4 b)
-{
-	return min(a, b);
-}
-
-template<>
-__device__ __host__ int minimum_unified(int a, int b)
-{
-	return min(a, b);
-}
-template<>
-__device__ __host__ int2 minimum_unified(int2 a, int2 b)
-{
-	return min(a, b);
-}
-template<>
-__device__ __host__ int3 minimum_unified(int3 a, int3 b)
-{
-	return min(a, b);
-}
-template<>
-__device__ __host__ int4 minimum_unified(int4 a, int4 b)
+inline __device__ __host__ uint4 minimum_unified(uint4 a, uint4 b)
 {
 	return min(a, b);
 }
 
 template<>
-__device__ __host__ float minimum_unified(float a, float b)
+inline __device__ __host__ uint maximum_value_format()
+{
+	return ~0u;
+}
+template<>
+inline __device__ __host__ uint2 maximum_value_format()
+{
+	return make_uint2(~0u);
+}
+template<>
+inline __device__ __host__ uint3 maximum_value_format()
+{
+	return make_uint3(~0u);
+}
+template<>
+inline __device__ __host__ uint4 maximum_value_format()
+{
+	return make_uint4(~0u);
+}
+
+template<>
+inline __device__ __host__ int minimum_unified(int a, int b)
+{
+	return min(a, b);
+}
+template<>
+inline __device__ __host__ int2 minimum_unified(int2 a, int2 b)
+{
+	return min(a, b);
+}
+template<>
+inline __device__ __host__ int3 minimum_unified(int3 a, int3 b)
+{
+	return min(a, b);
+}
+template<>
+inline __device__ __host__ int4 minimum_unified(int4 a, int4 b)
+{
+	return min(a, b);
+}
+
+template<>
+inline __device__ __host__ int maximum_value_format()
+{
+	return (1u << 31u) - 1u;
+}
+template<>
+inline __device__ __host__ int2 maximum_value_format()
+{
+	return make_int2((1u << 31u) - 1u);
+}
+template<>
+inline __device__ __host__ int3 maximum_value_format()
+{
+	return make_int3((1u << 31u) - 1u);
+}
+template<>
+inline __device__ __host__ int4 maximum_value_format()
+{
+	return make_int4((1u << 31u) - 1u);
+}
+
+template<>
+inline __device__ __host__ float minimum_unified(float a, float b)
 {
 	return fminf(a, b);
 }
 template<>
-__device__ __host__ float2 minimum_unified(float2 a, float2 b)
+inline __device__ __host__ float2 minimum_unified(float2 a, float2 b)
 {
 	return fminf(a, b);
 }
 template<>
-__device__ __host__ float3 minimum_unified(float3 a, float3 b)
+inline __device__ __host__ float3 minimum_unified(float3 a, float3 b)
 {
 	return fminf(a, b);
 }
 template<>
-__device__ __host__ float4 minimum_unified(float4 a, float4 b)
+inline __device__ __host__ float4 minimum_unified(float4 a, float4 b)
 {
 	return fminf(a, b);
+}
+
+template<>
+inline __device__ __host__ float maximum_value_format()
+{
+	return INFINITY;
+}
+template<>
+inline __device__ __host__ float2 maximum_value_format()
+{
+	return make_float2(INFINITY);
+}
+template<>
+inline __device__ __host__ float3 maximum_value_format()
+{
+	return make_float3(INFINITY);
+}
+template<>
+inline __device__ __host__ float4 maximum_value_format()
+{
+	return make_float4(INFINITY);
 }
 
 template <class T>
 __global__ void ____minimum_reduce(T* data, uint length, uint stride)
 {
 	__shared__ T shared[____block_size_cumsum]; uint internal_idx = threadIdx.x;
-	uint grid_idx = (threadIdx.x + ____block_size_cumsum * blockIdx.x + 1u) * stride - 1u;
+	uint grid_idx = (threadIdx.x + ____block_size_cumsum * blockIdx.x) * stride;
 	shared[internal_idx] = (grid_idx < length) ? data[grid_idx] : T();
 
 	for (uint i = 0u; i < ____block_pow_cumsum; i++)
 	{
-		internal_idx = (internal_idx << 1u) + 1u;
+		internal_idx <<= 1u;
 		__syncthreads();
 		if (internal_idx < ____block_size_cumsum)
-			shared[internal_idx] = minimum_unified<T>(shared[internal_idx], shared[internal_idx - (1u << i)]);
+			shared[internal_idx] = minimum_unified<T>(shared[internal_idx], shared[internal_idx + (1u << i)]);
 		__syncthreads();
 	}
-	if (grid_idx < length && (threadIdx.x + 1u) == ____block_size_cumsum)
+	if (grid_idx < length && threadIdx.x == 0u)
 		data[grid_idx] = shared[threadIdx.x];
 }
 /// <summary>
@@ -284,7 +416,7 @@ T find_minimum_val(smart_gpu_buffer<T>& data)
 		____minimum_reduce<<<blocks, ____block_size_cumsum>>>(data.gpu_buffer_ptr, data.dedicated_len, stride);
 		stride <<= ____block_pow_cumsum;
 	}
-	T result; cudaMemcpy(&result, data.gpu_buffer_ptr + (data.dedicated_len - 1u), sizeof(T), cudaMemcpyDeviceToHost);
+	T result; cudaMemcpy(&result, data.gpu_buffer_ptr, sizeof(T), cudaMemcpyDeviceToHost);
 	return result;
 }
 
