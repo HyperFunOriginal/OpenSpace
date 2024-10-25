@@ -110,7 +110,7 @@ __global__ void __courant_friedrich_lewy_condition_hydrodynamics(float* conditio
 	const uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= grid_cell_count) { return; }
 
-	const uint index_from = (cell_bounds[grid_cell_count - 1u] * idx) / grid_cell_count;
+	const uint index_from = (uint)((cell_bounds[grid_cell_count - 1u] * (ulong)idx) / grid_cell_count); // need to prevent overflow
 	float factor = averages[index_from].speed_of_sound_kms / kinematics[index_from].radius_km;
 	condition_buffer[idx] = factor;
 }
@@ -125,14 +125,14 @@ struct timestep_helper
 		dim3 threads = dim3(simulation.cell_bounds.dedicated_len > 512u ? 512u : simulation.cell_bounds.dedicated_len);
 		dim3 blocks = dim3((uint)ceilf(simulation.cell_bounds.dedicated_len / (float)threads.x));
 		__courant_friedrich_lewy_condition_hydrodynamics<<<blocks, threads>>>(timestepping_buffer.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr, simulation.smoothed_particle_hydrodynamics.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr);
-		return 1.f / find_maximum_val(timestepping_buffer);
+		return 4.45f / find_maximum_val(timestepping_buffer);
 	}
 	float maximal_timestep_courant_friedrich_lewy_condition_bulk(kinematic_simulation& simulation)
 	{
 		dim3 threads = dim3(simulation.cell_bounds.dedicated_len > 512u ? 512u : simulation.cell_bounds.dedicated_len);
 		dim3 blocks = dim3((uint)ceilf(simulation.cell_bounds.dedicated_len / (float)threads.x));
 		__courant_friedrich_lewy_condition_bulk<<<blocks, threads>>>(timestepping_buffer.gpu_buffer_ptr, simulation.cell_bounds.gpu_buffer_ptr, simulation.kinematic_data.buffer.gpu_buffer_ptr, simulation.particles.buffer.gpu_buffer_ptr);
-		return .45f / find_maximum_val(timestepping_buffer);
+		return .5f / find_maximum_val(timestepping_buffer);
 	}
 	float maximal_timestep_hydrodynamics_simulation(hydrodynamics_simulation& simulation)
 	{
@@ -140,5 +140,81 @@ struct timestep_helper
 				maximal_timestep_courant_friedrich_lewy_condition_bulk(simulation));
 	}
 };
+
+//////////////////////////////////
+////  Hydrostatic Equilibria  ////
+//////////////////////////////////
+
+float __total_mass_from_core_density(const float core_density_kgm3, const float uniform_temperature_K, const float tgt_mass, const material_properties& mat)
+{
+	float ln_rho = logf(core_density_kgm3);
+	float mass_contained_within = tgt_mass * .00005f;
+	float radius = cbrtf(0.23873241463f * mass_contained_within / fmaxf(core_density_kgm3, mat.standard_density_kgm3));
+	const float max_dr = radius;
+
+	while (ln_rho > 0.f && radius < domain_size_km)
+	{
+		const float rho = expf(ln_rho);
+		float dPdrho = mat.EOS_dp_drho_isothermal(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, uniform_temperature_K);
+		if (isnan(dPdrho) || dPdrho < 1E-9f) { break; }
+		float dr = fminf(fminf(max_dr, dPdrho * radius * radius / (G_km2_m_s2_Tg * .05f * mass_contained_within)), domain_size_km - radius + 1.f);
+
+		radius += dr * .3333333333f;
+		float dln_rho_guess = -(G_km2_m_s2_Tg * .001f) * mass_contained_within * dr / (radius * radius * dPdrho);
+		float dmass_contained = 6.28318530718f * radius * radius * dr * rho * (1.f + expf(dln_rho_guess));
+		ln_rho -= (G_km2_m_s2_Tg * .001f) * (mass_contained_within + dmass_contained * .75f) * dr / (radius * radius * dPdrho);
+		mass_contained_within += dmass_contained;
+		radius += dr * .6666666666f;
+	}
+	return mass_contained_within;
+}
+
+float core_density_from_total_mass_regula_falsi(const float target_mass_Tg, const float uniform_temperature_K, const material_properties& mat)
+{
+	float lower_bound = 100.f, upper_bound = 100.f; int iters = 0;
+	float left_value = __total_mass_from_core_density(lower_bound, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg, right_value = left_value;
+	if (left_value > 0.f)
+	{
+		while (left_value > 0.f && iters < 100)
+		{
+			++iters;
+			upper_bound = lower_bound;
+			right_value = left_value;
+			lower_bound *= .5f;
+			left_value = __total_mass_from_core_density(lower_bound, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
+		}
+		if (abs(left_value) / target_mass_Tg < 1E-5f)
+			return lower_bound;
+	}
+	else {
+		while (right_value < 0.f && iters < 100)
+		{
+			++iters;
+			lower_bound = upper_bound;
+			left_value = right_value;
+			upper_bound *= 2.f;
+			right_value = __total_mass_from_core_density(upper_bound, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
+		}
+		if (abs(right_value) / target_mass_Tg < 1E-5f)
+			return upper_bound;
+	}
+	float intermediate = (upper_bound * right_value - lower_bound * left_value) * .6f / (right_value - left_value) + (upper_bound + lower_bound) * .2f;
+	float int_value = __total_mass_from_core_density(intermediate, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
+	while (abs(int_value) / target_mass_Tg > 1E-5f && iters < 100)
+	{
+		++iters;
+		if (int_value > 0.f) {
+			upper_bound = intermediate;
+			right_value = int_value;
+		}
+		else {
+			lower_bound = intermediate;
+			left_value = int_value;
+		}
+		intermediate = (upper_bound * right_value - lower_bound * left_value) * .6f / (right_value - left_value) + (upper_bound + lower_bound) * .2f;
+		int_value = __total_mass_from_core_density(intermediate, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
+	}
+	return intermediate;
+}
 
 #endif

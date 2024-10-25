@@ -59,16 +59,15 @@ void run_sph_sim()
     {
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
-        hydrogravitational_simulation simulation(10000000);
+        hydrogravitational_simulation simulation(1000000);
         smart_gpu_buffer<float3> x_factor(simulation.particle_capacity);
         timestep_helper timestepper = timestep_helper();
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>(); 
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6600.f }, 6E+15f, domain_size_km * make_float3(.25f), make_float3(4.f, 3.5f, 4.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 5300.f }, 6E+15f, domain_size_km * make_float3(.75f), -make_float3(4.f, 3.5f, 4.f), make_float3(0.f), 300.f, 0u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6600.f }, 6E+15f, domain_size_km * make_float3(.25f), make_float3(1.f, 0.5f, 1.f), make_float3(0.f), 300.f, 1u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 9000.f }, 1.2E+15f, domain_size_km * make_float3(.75f), -make_float3(1.f, 0.5f, 1.f), make_float3(0.f), 300.f, 4u));
         initialize_thermodynamic_objects(simulation, v);
-
         simulation.sort_spatially();
 
         float average_time = 0.f, curr_timestep, next_timestep = 2.f;
@@ -85,7 +84,7 @@ void run_sph_sim()
                 float tolerance = major_timestep - (t + curr_timestep);
                 float tol_cond = tolerance < timestep_tolerance ? major_timestep : tolerance;
                 next_timestep = timestepper.maximal_timestep_hydrodynamics_simulation(simulation);
-                next_timestep = fmaxf(fminf(tol_cond / fmaxf(1.f, roundf(tol_cond / next_timestep)),
+                next_timestep = fmaxf(fminf(tol_cond / ceilf(tol_cond / next_timestep),
                     tolerance < timestep_tolerance ? INFINITY : tolerance), timestep_tolerance);
             }
             writeline("Saving image " + std::to_string(i) + " with " + std::to_string(substeps_taken) + " substeps.");
