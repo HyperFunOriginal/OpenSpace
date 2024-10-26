@@ -170,7 +170,12 @@ struct gravitational_simulation : virtual public kinematic_simulation
 private:
 	smart_cpu_buffer<grid_cell_ensemble> coarsest;
 public:
-
+	virtual void destroy() override
+	{
+		octree.destroy();
+		coarsest.destroy();
+		kinematic_simulation::destroy();
+	}
 	gravitational_simulation(size_t allocation_particles) : kinematic_simulation(allocation_particles), octree(__octree_depth_index(grid_dimension_pow + 1)), coarsest(1u << (3u * minimum_depth)) { }
 	void generate_gravitational_data()
 	{

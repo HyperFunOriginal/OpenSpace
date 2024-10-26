@@ -8,7 +8,6 @@ __device__ constexpr float sph_cutoff_radius = .9f; // needs to be sufficiently 
 __device__ constexpr float ideal_gas_constant = 8.314f;
 __device__ constexpr uint max_material_count = 16u;
 __device__ constexpr float max_acceleration_factor_tick = .5f; // Deletes particles with sudden accelerations too high to be reasonable.
-__device__ constexpr float minimum_speed_of_sound = 1.f; // Minimum speed of sound in km/s used for artificial viscosity
 
 // Separate into thermal and bulk pressure.
 struct material_properties
@@ -57,7 +56,7 @@ struct material_properties
 			thermal_component = (stiffness_exponent * (stiffness_exponent * .5f - 1.5f) + 1.f) * number_density;
 		else
 			thermal_component = number_density * (stiffness_exponent - 1.f) * temp / (volume_fraction - 1.f) - thermal_pressure / (1.f - 1.f / volume_fraction);
-		return fmaxf(bulk_modulus_component + thermal_pressure + thermal_component, 0.f);
+		return fmaxf(bulk_modulus_component + thermal_pressure + thermal_component, number_density);
 	}
 	__device__ __host__ float EOS_dp_drho_isentropic(float density, float volume_fraction, float number_density, float temperature_K) const
 	{
@@ -70,7 +69,7 @@ struct material_properties
 			thermal_component = (stiffness_exponent * (stiffness_exponent * .5f - 1.5f) + 1.f) * number_density;
 		else
 			thermal_component = number_density * (stiffness_exponent - 1.f) * temp / (volume_fraction - 1.f) - thermal_pressure / (1.f - 1.f / volume_fraction);
-		return fmaxf(bulk_modulus_component + thermal_pressure + thermal_component, 0.f);
+		return fmaxf(bulk_modulus_component + thermal_pressure + thermal_component, number_density);
 	}
 	__device__ __host__ float EOS_speed_of_sound_kms(float density, float volume_fraction, float number_density, float temperature_K) const
 	{
@@ -190,7 +189,7 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 			const float other_density = average[i].avg_density_kgm3;
 
 			displacement *= ___spline_kernel_grad_factor(sq_dst, radius_factor) * kinematics[i].mass_Tg;
-			monaghan_viscosity_parameter *= (sph_monaghan_viscosity_alpha * fmaxf(this_data.speed_of_sound_kms + average[i].speed_of_sound_kms, minimum_speed_of_sound * 2.f) * 1000.f 
+			monaghan_viscosity_parameter *= (sph_monaghan_viscosity_alpha * (this_data.speed_of_sound_kms + average[i].speed_of_sound_kms) * 1000.f 
 				+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_beta * 2000.f)) / (other_density + this_data.avg_density_kgm3); // artificial viscosity; needs factor of 1000 for units to work out
 			
 			float thermal_pressure_mul = (average[i].thermal_pressure_GPa / (other_density * other_density)
@@ -237,7 +236,13 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 	particle_data_buffer<particle_thermodynamics> thermodynamic_data;
 	smart_gpu_buffer<SPH_variables> smoothed_particle_hydrodynamics;
 	smart_cpu_buffer<material_properties> materials_cpu_copy;
-
+	virtual void destroy() override
+	{
+		thermodynamic_data.destroy();
+		smoothed_particle_hydrodynamics.destroy();
+		materials_cpu_copy.destroy();
+		kinematic_simulation::destroy();
+	}
 	hydrodynamics_simulation(size_t allocation_particles) : kinematic_simulation(allocation_particles), thermodynamic_data(allocation_particles), smoothed_particle_hydrodynamics(allocation_particles), materials_cpu_copy(max_material_count)
 	{	
 		dim3 threads(allocation_particles > 512u ? 512u : allocation_particles);
@@ -286,6 +291,11 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 struct hydrogravitational_simulation : virtual public hydrodynamics_simulation, virtual public gravitational_simulation
 {
 	hydrogravitational_simulation(size_t allocation_particles) : hydrodynamics_simulation(allocation_particles), gravitational_simulation(allocation_particles), kinematic_simulation(allocation_particles) {}
+	virtual void destroy() override
+	{
+		hydrodynamics_simulation::destroy();
+		gravitational_simulation::destroy();
+	}
 	void apply_complete_timestep(const float timestep, float recenter_strength = 1.f, bool apply_heat = true)
 	{
 		sort_spatially();

@@ -127,7 +127,7 @@ void counting_sort_data_transfer(const smart_gpu_buffer<uint>& cell_bounds, cons
 ////   Geometry Initializers  ////
 //////////////////////////////////
 
-__global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float speed_of_sound_kms)
+__global__ void __init_sphere(particle* particles, const uint particle_count, const uint offset, const uint layers, const float3 center, const float particle_spacing, const float spacing)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_count) { return; }
@@ -145,7 +145,7 @@ __global__ void __init_sphere(particle* particles, const uint particle_count, co
 	particle to_set = particle();
 
 	to_set.set_existence(true);
-	to_set.set_true_pos(center + make_float3(cosf(t) * r, (ts * r) * lc + z * ls, z * lc - (ts * r) * ls) * (layer * .85f + speed_of_sound_kms) * particle_spacing);
+	to_set.set_true_pos(center + make_float3(cosf(t) * r, (ts * r) * lc + z * ls, z * lc - (ts * r) * ls) * (layer * .85f + spacing) * particle_spacing);
 	particles[idx + offset] = to_set;
 }
 
@@ -210,6 +210,12 @@ struct kinematic_simulation
 	particle_data_buffer<particle> particles;
 	smart_gpu_buffer<uint> cell_bounds;
 
+	virtual void destroy()
+	{
+		kinematic_data.destroy();
+		particles.destroy();
+		cell_bounds.destroy();
+	}
 	void set_cuboid(const uint particle_count, const uint write_offset, const float total_mass_Tg, const float3 dimensions, const float3 center_km = make_float3(domain_size_km * .5f), const float3 velocity_kms = make_float3(0.f), const float3 angular_vel_rads = make_float3(0.f))
 	{
 		uint threads = min(particle_count, 512);

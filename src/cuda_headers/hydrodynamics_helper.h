@@ -117,6 +117,10 @@ __global__ void __courant_friedrich_lewy_condition_hydrodynamics(float* conditio
 struct timestep_helper
 {
 	smart_gpu_buffer<float> timestepping_buffer;
+	void destroy()
+	{
+		timestepping_buffer.destroy();
+	}
 	timestep_helper() : timestepping_buffer(grid_cell_count) {
 
 	}
@@ -145,76 +149,147 @@ struct timestep_helper
 ////  Hydrostatic Equilibria  ////
 //////////////////////////////////
 
-float __total_mass_from_core_density(const float core_density_kgm3, const float uniform_temperature_K, const float tgt_mass, const material_properties& mat)
+/// <summary>
+/// Contains physical quantities arranged in strata based on physical distance from an origin.
+/// </summary>
+struct stratification_data
 {
-	float ln_rho = logf(core_density_kgm3);
-	float mass_contained_within = tgt_mass * .00005f;
-	float radius = cbrtf(0.23873241463f * mass_contained_within / fmaxf(core_density_kgm3, mat.standard_density_kgm3));
-	const float max_dr = radius;
+	smart_gpu_cpu_buffer<float> data;
+	float outer_radius;
 
-	while (ln_rho > 0.f && radius < domain_size_km)
+	stratification_data(uint layers, float outer_radius) : data(layers), outer_radius(outer_radius) {}
+	void destroy()
 	{
-		const float rho = expf(ln_rho);
-		float dPdrho = mat.EOS_dp_drho_isothermal(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, uniform_temperature_K);
-		if (isnan(dPdrho) || dPdrho < 1E-9f) { break; }
-		float dr = fminf(fminf(max_dr, dPdrho * radius * radius / (G_km2_m_s2_Tg * .05f * mass_contained_within)), domain_size_km - radius + 1.f);
-
-		radius += dr * .3333333333f;
-		float dln_rho_guess = -(G_km2_m_s2_Tg * .001f) * mass_contained_within * dr / (radius * radius * dPdrho);
-		float dmass_contained = 6.28318530718f * radius * radius * dr * rho * (1.f + expf(dln_rho_guess));
-		ln_rho -= (G_km2_m_s2_Tg * .001f) * (mass_contained_within + dmass_contained * .75f) * dr / (radius * radius * dPdrho);
-		mass_contained_within += dmass_contained;
-		radius += dr * .6666666666f;
+		data.destroy();
 	}
-	return mass_contained_within;
-}
+};
 
-float core_density_from_total_mass_regula_falsi(const float target_mass_Tg, const float uniform_temperature_K, const material_properties& mat)
+/// <summary>
+/// Constructs an object to determine the radius and density of an object in hydrostatic equilibrium given a mass and material. Assumes a uniform temperature throughout.
+/// Uses Regula Falsi to determine the correct density profile, with preprocessing for bounds.
+/// </summary>
+struct hydrostatic_body_solver
 {
-	float lower_bound = 100.f, upper_bound = 100.f; int iters = 0;
-	float left_value = __total_mass_from_core_density(lower_bound, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg, right_value = left_value;
-	if (left_value > 0.f)
+	float radius_km;
+	const float mass_Tg;
+	const float temperature_K;
+	float core_density_kgm3;
+	const material_properties& mat;
+
+	float __total_mass_from_core_density(const float core_density)
 	{
-		while (left_value > 0.f && iters < 100)
+		float ln_rho = logf(core_density);
+		float mass_contained_within = mass_Tg * .00005f;
+		radius_km = cbrtf(0.23873241463f * mass_contained_within / fmaxf(core_density, mat.standard_density_kgm3));
+		const float max_dr = radius_km;
+
+		while (ln_rho > 0.f && radius_km < domain_size_km)
 		{
-			++iters;
-			upper_bound = lower_bound;
-			right_value = left_value;
-			lower_bound *= .5f;
-			left_value = __total_mass_from_core_density(lower_bound, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
+			const float rho = expf(ln_rho);
+			float dPdrho = mat.EOS_pressure_GPa(rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K) > 0.f ? 
+				mat.EOS_dp_drho_isothermal(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K) : 0.f;
+			if (isnan(dPdrho) || dPdrho < 1E-9f) { break; }
+			float dr = fminf(fminf(max_dr, dPdrho * radius_km * radius_km / (G_km2_m_s2_Tg * .05f * mass_contained_within)), domain_size_km - radius_km + 1.f);
+
+			radius_km += dr * .3333333333f;
+			float dln_rho_guess = -(G_km2_m_s2_Tg * .001f) * mass_contained_within * dr / (radius_km * radius_km * dPdrho);
+			float dmass_contained = 6.28318530718f * radius_km * radius_km * dr * rho * (1.f + expf(dln_rho_guess));
+			ln_rho -= (G_km2_m_s2_Tg * .001f) * (mass_contained_within + dmass_contained * .75f) * dr / (radius_km * radius_km * dPdrho);
+			mass_contained_within += dmass_contained;
+			radius_km += dr * .6666666666f;
 		}
-		if (abs(left_value) / target_mass_Tg < 1E-5f)
-			return lower_bound;
+		return mass_contained_within;
 	}
-	else {
-		while (right_value < 0.f && iters < 100)
-		{
-			++iters;
-			lower_bound = upper_bound;
-			left_value = right_value;
-			upper_bound *= 2.f;
-			right_value = __total_mass_from_core_density(upper_bound, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
-		}
-		if (abs(right_value) / target_mass_Tg < 1E-5f)
-			return upper_bound;
-	}
-	float intermediate = (upper_bound * right_value - lower_bound * left_value) * .6f / (right_value - left_value) + (upper_bound + lower_bound) * .2f;
-	float int_value = __total_mass_from_core_density(intermediate, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
-	while (abs(int_value) / target_mass_Tg > 1E-5f && iters < 100)
+	hydrostatic_body_solver(const float target_mass_Tg, const float uniform_temperature_K, const material_properties& mat) : mass_Tg(target_mass_Tg), temperature_K(uniform_temperature_K), radius_km(0), core_density_kgm3(0), mat(mat)
 	{
-		++iters;
-		if (int_value > 0.f) {
-			upper_bound = intermediate;
-			right_value = int_value;
+		float lower_bound = 100.f, upper_bound = 100.f; int iters = 0;
+		float left_value = __total_mass_from_core_density(lower_bound) - target_mass_Tg, right_value = left_value;
+		if (left_value > 0.f)
+		{
+			while (left_value > 0.f && iters < 100)
+			{
+				++iters;
+				upper_bound = lower_bound;
+				right_value = left_value;
+				lower_bound *= .5f;
+				left_value = __total_mass_from_core_density(lower_bound) - target_mass_Tg;
+			}
+			if (abs(left_value) / target_mass_Tg < 1E-5f)
+			{
+				core_density_kgm3 = lower_bound;
+				goto NOTHING;
+			}
 		}
 		else {
-			lower_bound = intermediate;
-			left_value = int_value;
+			while (right_value < 0.f && iters < 100)
+			{
+				++iters;
+				lower_bound = upper_bound;
+				left_value = right_value;
+				upper_bound *= 2.f;
+				right_value = __total_mass_from_core_density(upper_bound) - target_mass_Tg;
+			}
+			if (abs(right_value) / target_mass_Tg < 1E-5f)
+			{
+				core_density_kgm3 = upper_bound;
+				goto NOTHING;
+			}
 		}
-		intermediate = (upper_bound * right_value - lower_bound * left_value) * .6f / (right_value - left_value) + (upper_bound + lower_bound) * .2f;
-		int_value = __total_mass_from_core_density(intermediate, uniform_temperature_K, target_mass_Tg, mat) - target_mass_Tg;
+		float intermediate = (upper_bound * right_value - lower_bound * left_value) * .6f / (right_value - left_value) + (upper_bound + lower_bound) * .2f;
+		float int_value = __total_mass_from_core_density(intermediate) - target_mass_Tg;
+		while (abs(int_value) / target_mass_Tg > 1E-5f && iters < 100)
+		{
+			++iters;
+			if (int_value > 0.f) {
+				upper_bound = intermediate;
+				right_value = int_value;
+			}
+			else {
+				lower_bound = intermediate;
+				left_value = int_value;
+			}
+			intermediate = (upper_bound * right_value - lower_bound * left_value) * .6f / (right_value - left_value) + (upper_bound + lower_bound) * .2f;
+			int_value = __total_mass_from_core_density(intermediate) - target_mass_Tg;
+		}
+		core_density_kgm3 = intermediate;
+	NOTHING:
 	}
-	return intermediate;
-}
+	stratification_data density_distribution(uint layers = 10u)
+	{
+		stratification_data densities(layers, radius_km);
+
+		densities.data.cpu_buffer_ptr[0] = core_density_kgm3;
+		float ln_rho = logf(core_density_kgm3);
+		float mass_contained_within = 1E-10f;
+		const float deltaR = radius_km / (layers - 1u);
+		const float max_dr = cbrtf(1E-5f * mass_Tg / fmaxf(core_density_kgm3, mat.standard_density_kgm3));
+		float radius = 1E-10f;
+
+		for (uint i = 1; i < layers; i++)
+		{
+			for (float rad_step = 0.f; rad_step < deltaR * .9999f; )
+			{
+				const float rho = expf(ln_rho);
+				float dPdrho = mat.EOS_dp_drho_isothermal(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K);
+				float tolerance = fminf(max_dr, deltaR - rad_step);
+				float dr = fminf(tolerance, dPdrho * (radius + rad_step) * (radius + rad_step) / (G_km2_m_s2_Tg * .05f * mass_contained_within));
+				dr = tolerance / ceilf(tolerance / dr);
+
+				rad_step += dr * .3333333333f;
+				float dln_rho_guess = -(G_km2_m_s2_Tg * .001f) * mass_contained_within * dr / ((radius + rad_step) * (radius + rad_step) * dPdrho);
+				float dmass_contained = 6.28318530718f * (radius + rad_step) * (radius + rad_step) * dr * rho * (1.f + expf(dln_rho_guess));
+				ln_rho -= (G_km2_m_s2_Tg * .001f) * (mass_contained_within + dmass_contained * .75f) * dr / ((radius + rad_step) * (radius + rad_step) * dPdrho);
+				mass_contained_within += dmass_contained;
+				rad_step += dr * .6666666666f;
+			}
+			radius += deltaR;
+			densities.data.cpu_buffer_ptr[i] = expf(ln_rho);
+		}
+		densities.data.copy_to_gpu();
+		return densities;
+	}
+};
+
+
 
 #endif

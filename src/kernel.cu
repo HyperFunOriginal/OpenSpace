@@ -60,15 +60,13 @@ void run_sph_sim()
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
         hydrogravitational_simulation simulation(1000000);
-        smart_gpu_buffer<float3> x_factor(simulation.particle_capacity);
         timestep_helper timestepper = timestep_helper();
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>(); 
         v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6600.f }, 6E+15f, domain_size_km * make_float3(.25f), make_float3(1.f, 0.5f, 1.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 9000.f }, 1.2E+15f, domain_size_km * make_float3(.75f), -make_float3(1.f, 0.5f, 1.f), make_float3(0.f), 300.f, 4u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 1500.f }, 1E+14f, domain_size_km * make_float3(.75f), make_float3(-20.f, -15.f, -20.f), make_float3(0.f), 300.f, 0u));
         initialize_thermodynamic_objects(simulation, v);
-        simulation.sort_spatially();
 
         float average_time = 0.f, curr_timestep, next_timestep = 2.f;
         for (uint i = 0u; i < 6000; i++)
@@ -78,7 +76,7 @@ void run_sph_sim()
             {
                 substeps_taken++;
                 curr_timestep = next_timestep;
-                apply_xsph_variant(x_factor, simulation, curr_timestep, 5e-4f);
+                simulation.apply_complete_timestep(curr_timestep, 5e-4f);
                 writeline("Ran physics step of timestep " + std::to_string(curr_timestep) + "s.");
                
                 float tolerance = major_timestep - (t + curr_timestep);
