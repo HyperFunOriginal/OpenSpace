@@ -5,7 +5,7 @@
 #include <chrono>
 
 // Tunable
-constexpr float major_timestep = 10.f;
+constexpr float major_timestep = 30.f;
 constexpr float timestep_tolerance = major_timestep * 1E-4f;
 constexpr uint width  = 512u;
 constexpr uint height = 512u;
@@ -59,35 +59,41 @@ void run_sph_sim()
     {
         smart_gpu_cpu_buffer<uint> temp(width * height);
 
-        hydrogravitational_simulation simulation(1000000);
+        hydrogravitational_simulation simulation(8000000);
         timestep_helper timestepper = timestep_helper();
         init_materials(simulation);
 
         std::vector<initial_thermodynamic_object> v = std::vector<initial_thermodynamic_object>(); 
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 6600.f }, 6E+15f, domain_size_km * make_float3(.25f), make_float3(1.f, 0.5f, 1.f), make_float3(0.f), 300.f, 1u));
-        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 1500.f }, 1E+14f, domain_size_km * make_float3(.75f), make_float3(-20.f, -15.f, -20.f), make_float3(0.f), 300.f, 0u));
-        initialize_thermodynamic_objects(simulation, v);
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 0.f }, 6E+17f, domain_size_km * make_float3(.35f, .35f, .425f), make_float3(7.f, 2.f, 0.f), make_float3(0.f), 10.f, 2u));
+        v.push_back(initial_thermodynamic_object(initial_kinematic_object::geometry::GEOM_SPHERE, { 0.f }, 6E+17f, domain_size_km * make_float3(.7f, .7f, .575f), make_float3(-7.f, -2.f, 0.f), make_float3(0.f), 10.f, 2u));
+        initialize_thermodynamic_objects_hydrostatic_equilibrium(simulation, v);
 
         float average_time = 0.f, curr_timestep, next_timestep = 2.f;
-        for (uint i = 0u; i < 6000; i++)
+        for (uint i = 0u; i < 3000; i++)
         {
             uint substeps_taken = 0u;
             for (float t = 0.f; t + timestep_tolerance < major_timestep; t += curr_timestep)
             {
                 substeps_taken++;
                 curr_timestep = next_timestep;
-                simulation.apply_complete_timestep(curr_timestep, 5e-4f);
+                simulation.apply_complete_timestep(curr_timestep, 4e-4f);
                 writeline("Ran physics step of timestep " + std::to_string(curr_timestep) + "s.");
                
                 float tolerance = major_timestep - (t + curr_timestep);
                 float tol_cond = tolerance < timestep_tolerance ? major_timestep : tolerance;
                 next_timestep = timestepper.maximal_timestep_hydrodynamics_simulation(simulation);
+                if (next_timestep < timestep_tolerance) { goto RETURN; }
                 next_timestep = fmaxf(fminf(tol_cond / ceilf(tol_cond / next_timestep),
                     tolerance < timestep_tolerance ? INFINITY : tolerance), timestep_tolerance);
             }
             writeline("Saving image " + std::to_string(i) + " with " + std::to_string(substeps_taken) + " substeps.");
             save_octree_image(temp, simulation, width, height, ("SaveFolder/" + std::to_string(i) + ".png").c_str());
         }
+
+    RETURN:
+        timestepper.destroy();
+        simulation.destroy();
+        temp.destroy();
     }
 }
 
@@ -99,6 +105,20 @@ int main()
         Sleep(5000);
         return 1;
     }
+
+    //material_properties mat;
+    //mat.bulk_modulus_GPa = 2.1f;
+    //mat.limiting_heat_capacity_kJkgK = 2.1f;
+    //mat.standard_density_kgm3 = 1000.f;
+    //mat.molar_mass_kgmol = 1.8E-2f;
+    //mat.thermal_scale_K = 50.f;
+    //mat.stiffness_exponent = 4.0f;
+    //writeline_t(mat.EOS_speed_of_sound_kms(7000.f, 7000.f / mat.standard_density_kgm3, 7000.f / mat.molar_mass_kgmol, 10000.f));
+    //hydrostatic_body_solver solver(2E+18f, 300.f, mat);
+    //solver.density_distribution(100u).destroy();
+
+    //while (true)
+    //    Sleep(1000);
 
     run_sph_sim();
 

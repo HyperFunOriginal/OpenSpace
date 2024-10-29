@@ -49,9 +49,9 @@ struct particle_kinematics
 	float radius_km;
 	float3 velocity_kms;
 	float3 acceleration_ms2;
-	__device__ __host__ void multiply_radius(float change_factor = 1.f, float min_rad = 100.f, float max_rad = 1000.f)
+	__device__ __host__ void multiply_radius(float change_factor = 1.f)
 	{
-		radius_km = fminf(fmaxf(radius_km * change_factor, min_rad), max_rad);
+		radius_km = fabsf(radius_km * change_factor);
 	}
 	__device__ __host__ void change_mass(particle* particle, float change_Tg = 0.f)
 	{
@@ -191,7 +191,6 @@ __global__ void __apply_kinematics(particle* particles, particle_kinematics* kin
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_capacity) { return; }
-
 	if (!particles[idx].exists()) { return; }
 	float3 new_V = kinematics[idx].velocity_kms + kinematics[idx].acceleration_ms2 * timestep_s * .001f;
 	particles[idx].set_true_pos(particles[idx].true_pos() + new_V * timestep_s - subtract_offset);
@@ -236,7 +235,7 @@ struct kinematic_simulation
 
 		__init_sphere<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, particle_count, write_offset, layers, center_km, total_radius_km / (layers * .85f - 0.2f), (particle_count > 1u) * .15f);
 		__init_kinematics<<<blocks, threads>>>(particles.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_count, write_offset, velocity_kms,
-			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km / cbrtf(particle_count)); cuda_sync();
+			center_km, angular_vel_rads, total_mass_Tg / particle_count, total_radius_km * 1.15470053838f / cbrtf(particle_count)); cuda_sync();
 	}
 	
 	/// <summary>
@@ -274,6 +273,10 @@ struct kinematic_simulation
 		__copy_spatial_counting_sort<<<blocks, threads>>>(cell_bounds.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particles.temp.gpu_buffer_ptr, particle_capacity);
 		cuda_sync(); particles.swap_pointers();
 	}
+	uint yield_particle_count() const {
+		uint total_count; cudaMemcpy(&total_count, cell_bounds.gpu_buffer_ptr + (cell_bounds.dedicated_len - 1u), sizeof(uint), cudaMemcpyDeviceToHost);
+		return total_count;
+	}
 };
 
 #include <vector>
@@ -295,7 +298,23 @@ struct initial_kinematic_object
 
 	initial_kinematic_object() {}
 
-	float volume() const {
+	float volume_km3() const {
+		float temp_var;
+		switch (geometry_type)
+		{
+		case initial_kinematic_object::GEOM_SPHERE:
+			temp_var = dimensions[0];
+			temp_var *= temp_var * temp_var * 4.18879020479f;
+			break;
+		case initial_kinematic_object::GEOM_CUBOID:
+			temp_var = dimensions[0];
+			temp_var *= dimensions[1];
+			temp_var *= dimensions[2];
+			break;
+		}
+		return temp_var;
+	}
+	float volume_dom() const {
 		float temp_var;
 		switch (geometry_type)
 		{
@@ -312,7 +331,7 @@ struct initial_kinematic_object
 		return temp_var;
 	}
 	float particle_assignment_weightage() const {
-		return expf(logf(volume()) * .85f + logf(total_mass_Tg) * .15f);
+		return expf(logf(volume_dom()) * .85f + logf(total_mass_Tg) * .15f);
 	}
 	initial_kinematic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
 		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f)) : 
