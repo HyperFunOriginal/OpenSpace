@@ -182,7 +182,7 @@ private:
 	float total_mass_from_core_density(float core_density)
 	{
 		float ln_rho = logf(core_density);
-		float mass_contained_within = mass_Tg * .00005f;
+		float mass_contained_within = mass_Tg * .00001f;
 		radius_km = cbrtf(0.23873241463f * mass_contained_within / fmaxf(core_density, mat.standard_density_kgm3));
 		const float max_dr = radius_km;
 
@@ -190,7 +190,7 @@ private:
 		{
 			const float rho = expf(ln_rho);
 			float dPdrho = mat.EOS_pressure_GPa(rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K) > 0.f ? 
-				mat.EOS_dp_drho_isothermal(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K) : 0.f;
+				mat.EOS_dp_drho_isothermal_km2s2(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K) : 0.f;
 			if (isnan(dPdrho) || dPdrho < 1E-9f) { break; }
 			float dr = fminf(fminf(max_dr, dPdrho * radius_km * radius_km / (G_km2_m_s2_Tg * .05f * mass_contained_within)), domain_size_km - radius_km + 1.f);
 
@@ -206,7 +206,7 @@ private:
 public:
 	hydrostatic_body_solver(float target_mass_Tg, float uniform_temperature_K, material_properties& mat) : mass_Tg(target_mass_Tg), temperature_K(uniform_temperature_K), radius_km(0), core_density_kgm3(0), mat(mat)
 	{
-		float lower_bound = 100.f, upper_bound = 100.f; int iters = 0;
+		float lower_bound = mat.standard_density_kgm3, upper_bound = mat.standard_density_kgm3; int iters = 0;
 		float left_value = total_mass_from_core_density(lower_bound) - target_mass_Tg, right_value = left_value;
 		if (left_value > 0.f)
 		{
@@ -268,12 +268,14 @@ public:
 				densities.data.cpu_buffer_ptr[i] = densities.data.cpu_buffer_ptr[0];
 		}
 		else {
+			writeline("Computing densities at various depths for hydrostatic equilibrium:");
 			densities.data.cpu_buffer_ptr[0] = core_density_kgm3;
 			float ln_rho = logf(core_density_kgm3);
 			float mass_contained_within = 1E-10f;
 			const float deltaR = radius_km / (layers - 1u);
 			const float max_dr = cbrtf(1E-5f * mass_Tg / fmaxf(core_density_kgm3, mat.standard_density_kgm3));
 			float radius = 1E-10f;
+			writeline("    Radius: " + std::to_string(radius) + " km; Density: " + std::to_string(core_density_kgm3) + " kg/m3");
 
 			for (uint i = 1; i < layers; i++)
 			{
@@ -281,20 +283,24 @@ public:
 				{
 					const float rho = expf(ln_rho);
 					float tolerance = fminf(max_dr, deltaR - rad_step);
-					float dPdrho = mat.EOS_dp_drho_isothermal(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K);
-					float dr = fminf(tolerance, dPdrho * (radius + rad_step) * (radius + rad_step) / (G_km2_m_s2_Tg * .05f * mass_contained_within));
+					float dPdrho = mat.EOS_dp_drho_isothermal_km2s2(rho, rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K);
+					float dr = fminf(tolerance, dPdrho * (radius + rad_step) * (radius + rad_step) / (G_km2_m_s2_Tg * .1f * mass_contained_within));
 					dr = tolerance / ceilf(tolerance / dr);
 
 					rad_step += dr * .3333333333f;
 					float dln_rho_guess = -(G_km2_m_s2_Tg * .001f) * mass_contained_within * dr / ((radius + rad_step) * (radius + rad_step) * dPdrho);
 					float dmass_contained = 6.28318530718f * (radius + rad_step) * (radius + rad_step) * dr * rho * (1.f + expf(dln_rho_guess));
-					ln_rho -= (G_km2_m_s2_Tg * .001f) * (mass_contained_within + dmass_contained * .75f) * dr / ((radius + rad_step) * (radius + rad_step) * dPdrho);
+					if (mat.EOS_pressure_GPa(rho / mat.standard_density_kgm3, rho / mat.molar_mass_kgmol, temperature_K) > 0.f)
+						ln_rho -= (G_km2_m_s2_Tg * .001f) * (mass_contained_within + dmass_contained * .75f) * dr / ((radius + rad_step) * (radius + rad_step) * dPdrho);
 					mass_contained_within += dmass_contained;
 					rad_step += dr * .6666666666f;
 				}
 				radius += deltaR;
-				densities.data.cpu_buffer_ptr[i] = expf(ln_rho);
+				const float rho_2 = expf(ln_rho);
+				densities.data.cpu_buffer_ptr[i] = rho_2;
+				writeline("    Radius: " + std::to_string(radius) + " km; Density: " + std::to_string(rho_2) + " kg/m3");
 			}
+			writeline("");
 		}
 		densities.data.copy_to_gpu();
 		return densities;

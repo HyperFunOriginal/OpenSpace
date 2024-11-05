@@ -6,14 +6,15 @@
 
 // Tunable
 __device__ constexpr bool wrap_around = false;
-__device__ constexpr uint grid_dimension_pow = 8u; // Critical; Must be sufficiently large for moderate particle per cell counts. Must not be too large such that hydrodynamic averaging remains correct.
-__device__ constexpr float domain_size_km = 350000.f;
+__device__ constexpr uint grid_dimension_pow = 7u; // Critical; Must be sufficiently large for moderate particle per cell counts. Must not be too large such that hydrodynamic averaging remains correct.
+__device__ constexpr float domain_size_km = 70000.f;
 __device__ constexpr uint minimum_depth = 1u; // Already optimal
 
 // Derived
 __device__ constexpr uint grid_side_length = 1u << grid_dimension_pow;
 __device__ constexpr uint grid_cell_count = 1u << (3u * grid_dimension_pow);
 __device__ constexpr float size_grid_cell_km = domain_size_km / grid_side_length;
+__device__ constexpr float simulation_positions_epsilon = domain_size_km / 2147483648.f;
 
 //////////////////////////////////
 ////	  Morton Indexing	  ////

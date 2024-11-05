@@ -40,6 +40,18 @@ struct particle
 		else
 			position = make_uint3(pos * 4294967296.f);
 	}
+	// Special behaviours: Setting out of bounds either results in wrap around or deletion depending on settings. Setting to nonfinite values result in deletion. Higher precision than set_true_pos.
+	__device__ __host__ void add_to_pos(float3 delta)
+	{
+		cell_and_existence &= (isfinite(delta.x) && isfinite(delta.y) && isfinite(delta.z)) * (~0u);
+		int3 change = make_int3(roundf(delta * 2147483648.f / domain_size_km));
+		if (!wrap_around)
+		{
+			int3 clamped = clamp(change, -make_int3(position >> 1u), 2147483647 - make_int3(position >> 1u));
+			cell_and_existence &= (change == clamped) * (~0u);
+		}
+		position += make_uint3(change) << 1u;
+	}
 };
 static_assert(sizeof(particle) == 16, "Wrong size!");
 
@@ -193,7 +205,7 @@ __global__ void __apply_kinematics(particle* particles, particle_kinematics* kin
 	if (idx >= particle_capacity) { return; }
 	if (!particles[idx].exists()) { return; }
 	float3 new_V = kinematics[idx].velocity_kms + kinematics[idx].acceleration_ms2 * timestep_s * .001f;
-	particles[idx].set_true_pos(particles[idx].true_pos() + new_V * timestep_s - subtract_offset);
+	particles[idx].add_to_pos(new_V * timestep_s - subtract_offset);
 	kinematics[idx].velocity_kms = new_V;
 	kinematics[idx].acceleration_ms2 = make_float3(0.f);
 }
@@ -331,7 +343,7 @@ struct initial_kinematic_object
 		return temp_var;
 	}
 	float particle_assignment_weightage() const {
-		return expf(logf(volume_dom()) * .85f + logf(total_mass_Tg) * .15f);
+		return expf(logf(volume_dom()) * .75f + logf(total_mass_Tg) * .25f);
 	}
 	initial_kinematic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg, 
 		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f)) : 

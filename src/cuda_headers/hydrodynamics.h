@@ -2,11 +2,20 @@
 #define HYDRODYNAMICS_H
 #include "gravitation.h"
 
-__device__ constexpr float sph_monaghan_viscosity_alpha = 0.5f;
+__device__ constexpr float sph_monaghan_viscosity_alpha = 0.4f;
 __device__ constexpr float sph_monaghan_viscosity_beta = 2.f;
 __device__ constexpr float sph_cutoff_radius = .9f; // needs to be sufficiently large for accurate averaging. Less than 1.5
 __device__ constexpr float ideal_gas_constant = 8.314f;
-__device__ constexpr uint max_material_count = 16u;
+__device__ constexpr uint max_material_count = 8u; // material index trades bits for significand of float storing internal energy for index bits.
+
+__device__ constexpr uint min_bits_required(uint i)
+{
+	for (uint s = 0u; s < 32u; s++)
+		if (i >> (s + 1u) == 0u)
+			return s;
+	return ~0u;
+}
+__device__ constexpr uint bits_required_mat_idx = min_bits_required(max_material_count);
 
 // Separate into thermal and bulk pressure.
 struct material_properties
@@ -45,7 +54,7 @@ struct material_properties
 		return fmaxf(0.f, bulk_modulus_GPa * (powf(volume_fraction, stiffness_exponent) - volume_fraction * volume_fraction) / (stiffness_exponent - 2.f)
 			+ EOS_thermal_pressure_GPa(volume_fraction, number_density, temperature_K));
 	}
-	__device__ __host__ float EOS_dp_drho_isothermal(float density, float volume_fraction, float number_density, float temperature_K) const
+	__device__ __host__ float EOS_dp_drho_isothermal_km2s2(float density, float volume_fraction, float number_density, float temperature_K) const
 	{
 		float temp = powf(volume_fraction, stiffness_exponent - 1.f);
 		number_density *= temperature_K * (ideal_gas_constant * 1E-6f) / density;
@@ -57,7 +66,7 @@ struct material_properties
 			thermal_component = number_density * (stiffness_exponent - 1.f) * temp / (volume_fraction - 1.f) - thermal_pressure / (1.f - 1.f / volume_fraction);
 		return fmaxf(bulk_modulus_component + thermal_pressure + thermal_component, number_density);
 	}
-	__device__ __host__ float EOS_dp_drho_isentropic(float density, float volume_fraction, float number_density, float temperature_K) const
+	__device__ __host__ float EOS_dp_drho_isentropic_km2s2(float density, float volume_fraction, float number_density, float temperature_K) const
 	{
 		float temp = powf(volume_fraction, stiffness_exponent - 1.f);
 		float approximate_adiabatic_constant = 1.f + ideal_gas_constant / fmaxf(.001f, molar_mass_kgmol * 1000.f * specific_heat_capacity_TJKTg(temperature_K));
@@ -72,15 +81,28 @@ struct material_properties
 	}
 	__device__ __host__ float EOS_speed_of_sound_kms(float density, float volume_fraction, float number_density, float temperature_K) const
 	{
-		return sqrtf(EOS_dp_drho_isentropic(density, volume_fraction, number_density, temperature_K));
+		return sqrtf(EOS_dp_drho_isentropic_km2s2(density, volume_fraction, number_density, temperature_K));
 	}
 };
 struct particle_thermodynamics
 {
-	uint material_index;
-	float specific_thermal_energy_TJTg;
+	uint data; // evil bit hacks to store both int and float in the same space
+	__device__ __host__ uint get_material_index() const {
+		return data & ((1u << bits_required_mat_idx) - 1u);
+	}
+	__device__ __host__ float get_specific_thermal_energy_TJTg() const {
+		return *(float*)(&data);
+	}
+	__device__ __host__ void set_specific_thermal_energy_TJTg(const float var) {
+		uint reinterpretation = (*(uint*)(&var));
+		reinterpretation += (reinterpretation & (1u << (bits_required_mat_idx - 1u))) << 1u; // rounding mode
+		data = (reinterpretation & (~((1u << bits_required_mat_idx) - 1u))) | get_material_index();
+	}
+	__device__ __host__ void set_material_index(const uint idx) {
+		data = (data & (~((1u << bits_required_mat_idx) - 1u))) | (idx & ((1u << bits_required_mat_idx) - 1u));
+	}
 
-	__device__ __host__ particle_thermodynamics() : material_index(0u), specific_thermal_energy_TJTg(150.f) {}
+	__device__ __host__ particle_thermodynamics() : data(0x43160000u) {}
 };
 struct SPH_variables
 {
@@ -91,14 +113,14 @@ struct SPH_variables
 	float density_change_rate;
 
 	__device__ __host__ SPH_variables(const material_properties& mat_properties, const float density, const float volume_fraction, const float number_density,
-	const float internal_energy, const float density_change_rate) : total_pressure_GPa(), thermal_pressure_GPa(), avg_density_kgm3(density), density_change_rate(density_change_rate), speed_of_sound_kms()
+		const float internal_energy, const float density_change_rate) : avg_density_kgm3(density), density_change_rate(density_change_rate), speed_of_sound_kms(), total_pressure_GPa(), thermal_pressure_GPa()
 	{
 		const float temperature = mat_properties.temperature_K(internal_energy);
 		thermal_pressure_GPa = mat_properties.EOS_thermal_pressure_GPa(volume_fraction, number_density, temperature); // This is without interparticle potentials.
 		total_pressure_GPa = mat_properties.EOS_pressure_GPa(volume_fraction, number_density, temperature);
 		speed_of_sound_kms = mat_properties.EOS_speed_of_sound_kms(density, volume_fraction, number_density, temperature);
 	}
-	__device__ __host__ SPH_variables() : total_pressure_GPa(), avg_density_kgm3() {}
+	__device__ __host__ SPH_variables() {}
 };
 
 /////////////////////////////////////////
@@ -106,7 +128,7 @@ struct SPH_variables
 /////////////////////////////////////////
 
 __constant__ __device__ material_properties materials[max_material_count]; // Resides in constant memory. Needs to be sufficiently small.
-static_assert(sizeof(material_properties) * max_material_count < 4096u, "Constant memory insufficient!");
+static_assert(sizeof(material_properties)* max_material_count < 4096u, "Constant memory insufficient!");
 
 __device__ constexpr float __sq_dist_cutoff = sph_cutoff_radius * size_grid_cell_km * sph_cutoff_radius * size_grid_cell_km;
 inline __device__ __host__ float ___radius_factor(float this_radius, float other_radius)
@@ -121,12 +143,12 @@ inline __device__ __host__ float ___spline_kernel(float sq_displacement_km2, flo
 }
 inline __device__ __host__ float ___spline_kernel_grad_factor(float sq_displacement_km2, float radius_factor)
 {
-	sq_displacement_km2 /= radius_factor * 4.5f; if (sq_displacement_km2 > 1.f) { return 0.f; } float displacement_factor = sqrtf(sq_displacement_km2);
+	sq_displacement_km2 = fminf(sq_displacement_km2 * 0.22222222222f / radius_factor, 1.f); float displacement_factor = sqrtf(sq_displacement_km2);
 	return (2.f - displacement_factor * (3.f - sq_displacement_km2)) * 0.22222222222f / (radius_factor * radius_factor * sqrtf(radius_factor));
 }
 
-__global__ void __average_SPH_quantities(SPH_variables* average, const uint* cell_bounds, const particle_thermodynamics* thermodynamics, 
-											const particle_kinematics* kinematics, const particle* particles, const uint particle_capacity)
+__global__ void __average_SPH_quantities(SPH_variables* average, const uint* cell_bounds, const particle_thermodynamics* thermodynamics,
+	const particle_kinematics* kinematics, const particle* particles, const uint particle_capacity)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_capacity) { return; }
@@ -134,10 +156,9 @@ __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cel
 	if (!particles[idx].exists()) { return; }
 	const float3 this_pos = particles[idx].true_pos();
 	const float3 this_vel = kinematics[idx].velocity_kms;
-	const uint morton_index = particles[idx].morton_index();
 	const float this_radius_km = kinematics[idx].radius_km;
 
-	morton_cell_iterator iter = morton_cell_iterator(morton_index);
+	morton_cell_iterator iter = morton_cell_iterator(particles[idx].morton_index(), this_pos - floorf(this_pos / size_grid_cell_km) * size_grid_cell_km, grid_dimension_pow, sph_cutoff_radius * size_grid_cell_km);
 	float average_number_density_molm3 = 0.f, average_volume_fraction = 0.f, average_density_kgm3 = 0.f, density_rate_change_kgm3s = 0.f;
 
 	FOREACH(uint, loop_morton, iter)
@@ -148,19 +169,19 @@ __global__ void __average_SPH_quantities(SPH_variables* average, const uint* cel
 
 			float radius_factor = ___radius_factor(kinematics[i].radius_km, this_radius_km);
 			const float density_fraction = ___spline_kernel(dot(separation, separation), radius_factor) * kinematics[i].mass_Tg;
-			uint other_mat_idx = thermodynamics[i].material_index;
+			uint other_mat_idx = thermodynamics[i].get_material_index();
 
 			average_density_kgm3 += density_fraction;
 			average_number_density_molm3 += density_fraction / materials[other_mat_idx].molar_mass_kgmol;
 			average_volume_fraction += density_fraction / materials[other_mat_idx].standard_density_kgm3;
 			density_rate_change_kgm3s += dot(separation, this_vel - kinematics[i].velocity_kms) * density_fraction / radius_factor;
 		}
-
-	average[idx] = SPH_variables(materials[thermodynamics[idx].material_index], average_density_kgm3, average_volume_fraction,
-		average_number_density_molm3, thermodynamics[idx].specific_thermal_energy_TJTg, density_rate_change_kgm3s);
+	const particle_thermodynamics this_thermo = thermodynamics[idx];
+	average[idx] = SPH_variables(materials[this_thermo.get_material_index()], average_density_kgm3, average_volume_fraction,
+		average_number_density_molm3, this_thermo.get_specific_thermal_energy_TJTg(), density_rate_change_kgm3s);
 }
 __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cell_bounds, particle_thermodynamics* thermodynamics,
-									particle_kinematics* kinematics, particle* particles, const uint particle_capacity, const float timestep)
+	particle_kinematics* kinematics, particle* particles, const uint particle_capacity, const float timestep)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
 	if (idx >= particle_capacity) { return; }
@@ -171,7 +192,7 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 	const float this_radius_km = kinematics[idx].radius_km;
 	const SPH_variables this_data = average[idx];
 
-	morton_cell_iterator iter = morton_cell_iterator(particles[idx].morton_index());
+	morton_cell_iterator iter = morton_cell_iterator(particles[idx].morton_index(), this_pos - floorf(this_pos / size_grid_cell_km) * size_grid_cell_km, grid_dimension_pow, sph_cutoff_radius * size_grid_cell_km);
 	float3 hydrodynamic_acceleration_ms2 = make_float3(0.f);
 	float specific_internal_energy_change_TJTg = 0.f;
 
@@ -188,25 +209,25 @@ __global__ void __apply_SPH_forces(const SPH_variables* average, const uint* cel
 			const float other_density = average[i].avg_density_kgm3;
 
 			displacement *= ___spline_kernel_grad_factor(sq_dst, radius_factor) * kinematics[i].mass_Tg;
-			monaghan_viscosity_parameter *= (sph_monaghan_viscosity_alpha * (this_data.speed_of_sound_kms + average[i].speed_of_sound_kms) * 1000.f 
-				+ monaghan_viscosity_parameter * (sph_monaghan_viscosity_beta * 2000.f)) / (other_density + this_data.avg_density_kgm3); // artificial viscosity; needs factor of 1000 for units to work out
-			
-			float thermal_pressure_mul = (average[i].thermal_pressure_GPa / (other_density * other_density)
-				+ this_data.thermal_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
-			float total_pressure_mul = (average[i].total_pressure_GPa / (other_density * other_density) 
-				+ this_data.total_pressure_GPa / (this_data.avg_density_kgm3 * this_data.avg_density_kgm3)) * 1E+6f + monaghan_viscosity_parameter;
+			monaghan_viscosity_parameter *= ((this_data.speed_of_sound_kms + average[i].speed_of_sound_kms) * (sph_monaghan_viscosity_alpha * 1000.f)
+																			 + monaghan_viscosity_parameter * (sph_monaghan_viscosity_beta * 2000.f)) 
+										/ (other_density + this_data.avg_density_kgm3); // artificial viscosity; needs factor of 1000 for units to work out
+
+			// more stable combination even though not from action principle.
+			const float thermal_pressure_mul = (average[i].thermal_pressure_GPa + this_data.thermal_pressure_GPa) / (other_density * 1E-6f * this_data.avg_density_kgm3) + monaghan_viscosity_parameter;
+			const float total_pressure_mul = (average[i].total_pressure_GPa + this_data.total_pressure_GPa) / (other_density * 1E-6f * this_data.avg_density_kgm3) + monaghan_viscosity_parameter;
 
 			hydrodynamic_acceleration_ms2 += displacement * total_pressure_mul;
 			specific_internal_energy_change_TJTg += dot(displacement, relative_velocity) * thermal_pressure_mul; // discounts potential energy from interparticle potential.
 		}
 
 	kinematics[idx].acceleration_ms2 += hydrodynamic_acceleration_ms2;
-	thermodynamics[idx].specific_thermal_energy_TJTg += .5f * specific_internal_energy_change_TJTg * timestep;
+	thermodynamics[idx].set_specific_thermal_energy_TJTg(thermodynamics[idx].get_specific_thermal_energy_TJTg() + .5f * specific_internal_energy_change_TJTg * timestep);
 }
 __global__ void __step_particle_data(const SPH_variables* average, particle_kinematics* kinematics, const uint particle_capacity, const float timestep)
 {
 	uint idx = threadIdx.x + blockDim.x * blockIdx.x;
-	
+
 	if (idx >= particle_capacity) { return; }
 	kinematics[idx].multiply_radius(expf(-average[idx].density_change_rate * timestep * .33333333333f / average[idx].avg_density_kgm3));
 }
@@ -235,11 +256,11 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 		kinematic_simulation::destroy();
 	}
 	hydrodynamics_simulation(size_t allocation_particles) : kinematic_simulation(allocation_particles), thermodynamic_data(allocation_particles), smoothed_particle_hydrodynamics(allocation_particles), materials_cpu_copy(max_material_count)
-	{	
+	{
 		dim3 threads(allocation_particles > 512u ? 512u : allocation_particles);
 		dim3 blocks((uint)ceilf(allocation_particles / (float)threads.x));
 
-		__set_empty<<<blocks, threads>>>(thermodynamic_data.buffer.gpu_buffer_ptr, allocation_particles);
+		__set_empty << <blocks, threads >> > (thermodynamic_data.buffer.gpu_buffer_ptr, allocation_particles);
 	}
 	void set_thermodynamics(uint start_index, uint number_of_particles, uint material_index = 0u, float temperature_K = 298.f)
 	{
@@ -249,8 +270,8 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 		particle_thermodynamics temp = particle_thermodynamics();
 		material_properties& properties = materials_cpu_copy.cpu_buffer_ptr[material_index];
 		if (properties.limiting_heat_capacity_kJkgK == 0.f || properties.molar_mass_kgmol == 0.f) { throw std::logic_error("Material Properties invalid."); }
-		temp.material_index = material_index; temp.specific_thermal_energy_TJTg = fmaxf(0.01f, properties.specific_energy_TJTg(temperature_K));
-		__init_thermodynamics<<<blocks, threads>>>(thermodynamic_data.buffer.gpu_buffer_ptr, start_index, number_of_particles, temp);
+		temp.set_material_index(material_index); temp.set_specific_thermal_energy_TJTg(fmaxf(0.01f, properties.specific_energy_TJTg(temperature_K)));
+		__init_thermodynamics << <blocks, threads >> > (thermodynamic_data.buffer.gpu_buffer_ptr, start_index, number_of_particles, temp);
 	}
 	void copy_materials_to_gpu() const
 	{
@@ -259,19 +280,19 @@ struct hydrodynamics_simulation : virtual public kinematic_simulation
 	void compute_sph_quantities() {
 		dim3 threads(particle_capacity > 512u ? 512u : particle_capacity);
 		dim3 blocks((uint)ceilf(particle_capacity / (float)threads.x));
-		
-		__average_SPH_quantities<<<blocks, threads>>>(smoothed_particle_hydrodynamics.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr, 
+
+		__average_SPH_quantities << <blocks, threads >> > (smoothed_particle_hydrodynamics.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr,
 			thermodynamic_data.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity);
 	}
 	void apply_thermodynamic_timestep(const float timestep, bool apply_heat = true)
 	{
 		dim3 threads(particle_capacity > 512u ? 512u : particle_capacity);
 		dim3 blocks((uint)ceilf(particle_capacity / (float)threads.x));
-		
-		__apply_SPH_forces<<<blocks, threads>>>(smoothed_particle_hydrodynamics.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr,
+
+		__apply_SPH_forces << <blocks, threads >> > (smoothed_particle_hydrodynamics.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr,
 			thermodynamic_data.buffer.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particles.buffer.gpu_buffer_ptr, particle_capacity, timestep * apply_heat);
 
-		__step_particle_data<<<blocks, threads>>>(smoothed_particle_hydrodynamics.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_capacity, timestep);
+		__step_particle_data << <blocks, threads >> > (smoothed_particle_hydrodynamics.gpu_buffer_ptr, kinematic_data.buffer.gpu_buffer_ptr, particle_capacity, timestep);
 	}
 	virtual void counting_sort_transfers(const smart_gpu_buffer<uint>& cell_bounds, const smart_gpu_buffer<particle>& targets) override {
 		counting_sort_data_transfer(cell_bounds, targets, thermodynamic_data);
@@ -317,7 +338,7 @@ struct initial_thermodynamic_object : initial_kinematic_object
 	}
 
 	initial_thermodynamic_object(geometry geometry_type, std::vector<float> dimensions, float total_mass_Tg,
-		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f), 
+		float3 center_pos_km = make_float3(domain_size_km * .5f), float3 velocity_kms = make_float3(0.f), float3 angular_velocity_rads = make_float3(0.f),
 		float temperature_K = 298.f, uint material_index = 0u) : initial_kinematic_object(geometry_type, dimensions, total_mass_Tg, center_pos_km, velocity_kms, angular_velocity_rads), temperature_K(temperature_K), material_index(material_index)
 	{
 	}

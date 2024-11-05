@@ -118,7 +118,7 @@ __global__ void ___write_image_octree_densities(uint* pixels, const grid_cell_en
 
     for (uint i = morton_index; i < grid_cell_count; i = add_morton_indices(i, 4u))
     {
-        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 1E+3f);
+        float optical_thickness = cells[__octree_depth_index(grid_dimension_pow) + i].total_mass_Tg / (size_grid_cell_km * size_grid_cell_km * size_grid_cell_km * 2E+3f);
         render = fmaxf(render, optical_thickness);
     }
     pixels[coords] = ___rgba(make_float4(false_colour(render), 1.f));

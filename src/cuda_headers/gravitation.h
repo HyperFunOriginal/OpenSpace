@@ -185,7 +185,7 @@ public:
 			dim3 threads(min(512u, 1u << (3u * i)));
 			__mipmap_1_layer<<<((uint)ceilf((1u << (3u * i)) / (float)threads.x)), threads>>>(octree.gpu_buffer_ptr, i);
 		}
-		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / 512.f)), 512u>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr); cuda_sync();
+		__compute_barnes_hut<<<((uint)ceilf(grid_cell_count / 512.f)), 512u>>>(octree.gpu_buffer_ptr, cell_bounds.gpu_buffer_ptr);
 	}
 	void apply_kinematics_recenter(float timestep_s, float recenter_strength = 1.f)
 	{
